@@ -81,29 +81,29 @@ class homeControllers {
             })
             const relatedProducts = await productModel.find({
                 $and: [{
-                        _id: {
-                            $ne: product.id
-                        }
-                    },
-                    {
-                        category: {
-                            $eq: product.category
-                        }
+                    _id: {
+                        $ne: product.id
                     }
+                },
+                {
+                    category: {
+                        $eq: product.category
+                    }
+                }
                 ]
             }).limit(20)
             const moreProducts = await productModel.find({
 
                 $and: [{
-                        _id: {
-                            $ne: product.id
-                        }
-                    },
-                    {
-                        sellerId: {
-                            $eq: product.sellerId
-                        }
+                    _id: {
+                        $ne: product.id
                     }
+                },
+                {
+                    sellerId: {
+                        $eq: product.sellerId
+                    }
+                }
                 ]
             }).limit(3)
             responseReturn(res, 200, {
@@ -164,6 +164,58 @@ class homeControllers {
         }
     }
 
+    search_suggestions = async (req, res) => {
+        try {
+            // 1. Get and validate query parameter
+            const { query } = req.query;
+            console.log(`Search request for: "${query}"`);
+    
+            // 2. Validate minimum query length
+            if (!query || query.trim().length < 2) {
+                return res.json({  // Changed from 400 to 200 with empty array
+                    success: true,
+                    suggestions: []
+                });
+            }
+    
+            // 3. Search with expanded fields
+            const products = await productModel.find({
+                $or: [
+                    { name: { $regex: query, $options: 'i' } },
+                    { description: { $regex: query, $options: 'i' } },
+                    { category: { $regex: query, $options: 'i' } },
+                    { tags: { $regex: query, $options: 'i' } }
+                ]
+            })
+            .select('name description category image price')
+            .sort({ rating: -1 })
+            .limit(5)
+            .lean();
+    
+            // 4. Format response to match frontend expectations
+            const suggestions = products.map(p => p.name); // Return just names
+            // OR for richer suggestions:
+            // const suggestions = products.map(p => ({
+            //     text: p.name,
+            //     category: p.category,
+            //     image: p.image
+            // }));
+    
+            res.json({
+                success: true,
+                suggestions: suggestions // Ensure this is always an array
+            });
+    
+        } catch (error) {
+            console.error('Search error:', error);
+            res.status(500).json({
+                success: false,
+                suggestions: [], // Fallback empty array
+                error: 'Server error'
+            });
+        }
+    };
+
     submit_review = async (req, res) => {
         const {
             name,
@@ -218,49 +270,49 @@ class homeControllers {
         const skipPage = limit * (pageNo - 1)
         try {
             let getRating = await reviewModel.aggregate([{
-                    $match: {
-                        productId: {
-                            $eq: new ObjectId(productId)
-                        },
-                        rating: {
-                            $not: {
-                                $size: 0
-                            }
-                        }
-                    }
-                },
-                {
-                    $unwind: "$rating"
-                },
-                {
-                    $group: {
-                        _id: "$rating",
-                        count: {
-                            $sum: 1
+                $match: {
+                    productId: {
+                        $eq: new ObjectId(productId)
+                    },
+                    rating: {
+                        $not: {
+                            $size: 0
                         }
                     }
                 }
+            },
+            {
+                $unwind: "$rating"
+            },
+            {
+                $group: {
+                    _id: "$rating",
+                    count: {
+                        $sum: 1
+                    }
+                }
+            }
             ])
             let rating_review = [{
-                    rating: 5,
-                    sum: 0
-                },
-                {
-                    rating: 4,
-                    sum: 0
-                },
-                {
-                    rating: 3,
-                    sum: 0
-                },
-                {
-                    rating: 2,
-                    sum: 0
-                },
-                {
-                    rating: 1,
-                    sum: 0
-                }
+                rating: 5,
+                sum: 0
+            },
+            {
+                rating: 4,
+                sum: 0
+            },
+            {
+                rating: 3,
+                sum: 0
+            },
+            {
+                rating: 2,
+                sum: 0
+            },
+            {
+                rating: 1,
+                sum: 0
+            }
             ]
             for (let i = 0; i < rating_review.length; i++) {
                 for (let j = 0; j < getRating.length; j++) {

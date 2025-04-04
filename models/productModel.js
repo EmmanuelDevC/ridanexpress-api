@@ -54,15 +54,16 @@ const productSchema = new Schema({
 
 productSchema.index({
     name: 'text',
+    description: 'text',
     category: 'text',
-    brand: 'text',
-    description: 'text'
+    tags: 'text'
 }, {
+    name: 'search_index',
     weights: {
-        name: 5,
-        category: 4,
-        brand: 3,
-        description: 2
+        name: 4,
+        category: 3,
+        tags: 2,
+        description: 1
     }
 })
 
