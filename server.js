@@ -153,8 +153,13 @@ app.use(bodyParser.json())
 app.use(cookieParser())
 
 
-app.use('/api', require('./routes/chatRoutes'))
+if (process.env.NODE_ENV === 'development') {
+    console.log('Loading development test routes');
+    app.use('/api/test', require('./routes/testRoutes'));
+}
 
+
+app.use('/api', require('./routes/chatRoutes'))
 
 app.use('/api', require('./routes/paymentRoutes'))
 app.use('/api', require('./routes/bannerRoutes'))
