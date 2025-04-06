@@ -3,6 +3,8 @@ const {
     dbConnect
 } = require('./utiles/db')
 
+const path = require('path'); // Add this at the top
+
 const app = express()
 const cors = require('cors')
 const http = require('http')
@@ -33,6 +35,7 @@ const io = socket(server, {
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, 'client/build')));
 app.use(bodyParser.json());
 app.use(cookieParser());
 
@@ -158,6 +161,7 @@ if (process.env.NODE_ENV === 'development') {
     app.use('/api/test', require('./routes/testRoutes'));
 }
 
+app.use(express.static(path.join(__dirname, 'client/build')));
 
 app.use('/api', require('./routes/chatRoutes'))
 
@@ -173,8 +177,13 @@ app.use('/api', require('./routes/home/customerAuthRoutes'))
 app.use('/api', require('./routes/dashboard/sellerRoutes'))
 app.use('/api', require('./routes/dashboard/categoryRoutes'))
 app.use('/api', require('./routes/dashboard/productRoutes'))
-app.get('/', (req, res) => res.send('Hello World!'))
+// app.get('/', (req, res) => res.send('Hello World!'))
+
 
 const port = process.env.PORT
 dbConnect()
 server.listen(port, () => console.log(`Server is running on port ${port}!`))
+
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'client/build', 'index.html'));
+});
