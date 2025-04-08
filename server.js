@@ -161,8 +161,6 @@ if (process.env.NODE_ENV === 'development') {
     app.use('/api/test', require('./routes/testRoutes'));
 }
 
-app.use(express.static(path.join(__dirname, 'client/build')));
-
 app.use('/api', require('./routes/chatRoutes'))
 
 app.use('/api', require('./routes/paymentRoutes'))
