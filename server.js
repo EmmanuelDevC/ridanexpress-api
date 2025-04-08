@@ -175,8 +175,9 @@ app.use('/api', require('./routes/home/customerAuthRoutes'))
 app.use('/api', require('./routes/dashboard/sellerRoutes'))
 app.use('/api', require('./routes/dashboard/categoryRoutes'))
 app.use('/api', require('./routes/dashboard/productRoutes'))
-app.get('/', (req, res) => res.send('Protected Server'))
+app.get('/', (req, res) => res.send('I see what you are doing no try am ⚠️'))
 
 
 const port = process.env.PORT
 dbConnect()
+server.listen(port, () => console.log(`Server is running on port ${port}!`))
