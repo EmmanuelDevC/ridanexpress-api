@@ -17,7 +17,7 @@ const socket = require('socket.io')
 const mode = process.env.mode
 
 const server = http.createServer(app)
-https://ridanexpress-client.vercel.app/
+
 app.use(cors({
     origin: ['http://localhost:3000', 'http://localhost:3001', 'https://ridan-express-client.vercel.app'],
     credentials: true,
