@@ -18,15 +18,15 @@ class cardController {
         try {
             const product = await cardModel.findOne({
                 $and: [{
-                        productId: {
-                            $eq: productId
-                        }
-                    },
-                    {
-                        userId: {
-                            $eq: userId
-                        }
+                    productId: {
+                        $eq: productId
                     }
+                },
+                {
+                    userId: {
+                        $eq: userId
+                    }
+                }
                 ]
             })
             if (product) {
@@ -55,20 +55,20 @@ class cardController {
         } = req.params
         try {
             const card_products = await cardModel.aggregate([{
-                    $match: {
-                        userId: {
-                            $eq: new ObjectId(userId)
-                        }
-                    }
-                },
-                {
-                    $lookup: {
-                        from: 'products',
-                        localField: 'productId',
-                        foreignField: "_id",
-                        as: 'products'
+                $match: {
+                    userId: {
+                        $eq: new ObjectId(userId)
                     }
                 }
+            },
+            {
+                $lookup: {
+                    from: 'products',
+                    localField: 'productId',
+                    foreignField: "_id",
+                    as: 'products'
+                }
+            }
             ])
             let buy_product_item = 0
             let calculatePrice = 0;
@@ -198,25 +198,32 @@ class cardController {
     }
 
     add_wishlist = async (req, res) => {
-        const {
-            slug
-        } = req.body
+        const { userId, productId } = req.body; // Get user and product IDs
         try {
-            const product = await wishlistModel.findOne({
-                slug
-            })
-            if (product) {
-                responseReturn(res, 404, {
-                    error: 'Allready added'
-                })
-            } else {
-                await wishlistModel.create(req.body)
-                responseReturn(res, 201, {
-                    message: 'add to wishlist success'
-                })
+            // Check for existing entry for THIS user and product
+            const existing = await wishlistModel.findOne({
+                $and: [
+                    { userId: new ObjectId(userId) },
+                    { productId: new ObjectId(productId) }
+                ]
+            });
+
+            if (existing) {
+                return responseReturn(res, 409, {
+                    error: 'Product already in wishlist'
+                });
             }
+
+            await wishlistModel.create(req.body);
+            responseReturn(res, 201, {
+                message: 'Added to wishlist successfully'
+            });
+
         } catch (error) {
-            console.log(error.message)
+            console.error('Wishlist Error:', error);
+            responseReturn(res, 500, {
+                error: 'Server error. Please try again later.'
+            });
         }
     }
 
