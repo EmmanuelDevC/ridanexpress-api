@@ -1,4 +1,5 @@
 const cardModel = require('../../models/cardModel')
+const User = require('../../models/customerModel');
 const wishlistModel = require('../../models/wishlistModel')
 const {
     responseReturn
@@ -9,45 +10,92 @@ const {
     }
 } = require('mongoose')
 class cardController {
+    // add_to_card = async (req, res) => {
+    //     const {
+    //         userId,
+    //         productId,
+    //         quantity
+    //     } = req.body
+    //     try {
+    //         const product = await cardModel.findOne({
+    //             $and: [{
+    //                 productId: {
+    //                     $eq: productId
+    //                 }
+    //             },
+    //             {
+    //                 userId: {
+    //                     $eq: userId
+    //                 }
+    //             }
+    //             ]
+    //         })
+    //         if (product) {
+    //             responseReturn(res, 404, {
+    //                 error: 'Product already added to card'
+    //             })
+    //         } else {
+    //             const product = await cardModel.create({
+    //                 userId,
+    //                 productId,
+    //                 quantity
+    //             })
+    //             responseReturn(res, 201, {
+    //                 message: 'Add to card success',
+    //                 product
+    //             })
+    //         }
+    //     } catch (error) {
+    //         console.log(error.message)
+    //     }
+    // }
+
     add_to_card = async (req, res) => {
-        const {
-            userId,
-            productId,
-            quantity
-        } = req.body
+        const { userId, productId, quantity } = req.body;
+
         try {
-            const product = await cardModel.findOne({
-                $and: [{
-                    productId: {
-                        $eq: productId
-                    }
-                },
-                {
-                    userId: {
-                        $eq: userId
-                    }
-                }
-                ]
-            })
-            if (product) {
-                responseReturn(res, 404, {
-                    error: 'Product already added to card'
-                })
-            } else {
-                const product = await cardModel.create({
-                    userId,
-                    productId,
-                    quantity
-                })
-                responseReturn(res, 201, {
-                    message: 'Add to card success',
-                    product
-                })
+            // 1. Verify user exists
+            const userExists = await User.findById(userId);
+            if (!userExists) {
+                return responseReturn(res, 404, {
+                    error: 'User not found'
+                });
             }
+
+            // 2. Check for existing cart item
+            const existingProduct = await cardModel.findOne({
+                $and: [
+                    { productId: productId },
+                    { userId: userId }
+                ]
+            });
+
+            if (existingProduct) {
+                return responseReturn(res, 409, { // Changed to 409 Conflict
+                    error: 'Product already in cart'
+                });
+            }
+
+            // 3. Create new cart entry
+            const newCartItem = await cardModel.create({
+                userId,
+                productId,
+                quantity
+            });
+
+            responseReturn(res, 201, {
+                message: 'Added to cart successfully',
+                product: newCartItem
+            });
+
         } catch (error) {
-            console.log(error.message)
+            console.error('Cart Error:', error);
+            responseReturn(res, 500, {
+                error: 'Server error. Please try again later.'
+            });
         }
     }
+
     get_card_products = async (req, res) => {
         const co = 5;
         const {
