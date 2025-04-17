@@ -4,31 +4,32 @@ const cardModel = require('../../models/cardModel')
 const myShopWallet = require('../../models/myShopWallet')
 const sellerWallet = require('../../models/sellerWallet')
 const axios = require('axios')
-
 const { mongo: { ObjectId } } = require('mongoose')
 const { responseReturn } = require('../../utiles/response')
-
 const moment = require('moment')
-// const stripe = require('stripe')(process.env.stripe_key)
 
 class orderController {
-
     constructor() {
-        this.paymentTimeouts = new Map(); // Initialize here
-        this.paymentCheck = this.paymentCheck.bind(this); // Bind context
+        this.paymentTimeouts = new Map();
     }
-
+    generateTxRef = () => `ORDER-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     // Cancel unpaid orders after timeout
     paymentCheck = async (orderId) => {
         try {
             const order = await customerOrder.findById(orderId);
             if (order && order.payment_status === 'unpaid') {
-                await customerOrder.findByIdAndUpdate(orderId, { delivery_status: 'cancelled' });
-                await authOrderModel.updateMany({ orderId }, { delivery_status: 'cancelled' });
-                console.warn(`Order ${orderId} auto-cancelled due to unpaid status.`);
+                await customerOrder.findByIdAndUpdate(orderId, {
+                    delivery_status: 'cancelled',
+                    payment_status: 'cancelled'
+                });
+                await authOrderModel.updateMany(
+                    { orderId },
+                    { delivery_status: 'cancelled' }
+                );
+                console.log(`Order ${orderId} cancelled due to unpaid status`);
             }
-        } catch (err) {
-            console.error('Payment check error:', err);
+        } catch (error) {
+            console.error('Payment check error:', error);
         }
     }
 
@@ -37,47 +38,65 @@ class orderController {
         const timestamp = moment().format('LLL');
 
         try {
-            // Create customer order
+            // Generate unique transaction reference
+            const tx_ref = this.generateTxRef();
+
+            // Create customer order with tx_ref
             const order = await customerOrder.create({
                 customerId: userId,
                 shippingInfo,
                 products: products.flatMap(seller =>
-                    seller.products.map(item => ({ ...item.productInfo, quantity: item.quantity }))
+                    seller.products.map(item => ({
+                        ...item.productInfo,
+                        quantity: item.quantity
+                    }))
                 ),
                 price: price + shipping_fee,
                 delivery_status: 'pending',
                 payment_status: 'unpaid',
+                flutterwave_ref: tx_ref,
                 date: timestamp
             });
 
-            // Create author (seller) orders
-            const authorOrders = products.map(seller => ({
-                orderId: order.id,
+            // Create seller orders
+            const authOrders = products.map(seller => ({
+                orderId: order._id,
                 sellerId: seller.sellerId,
-                products: seller.products.map(item => ({ ...item.productInfo, quantity: item.quantity })),
+                products: seller.products.map(item => ({
+                    ...item.productInfo,
+                    quantity: item.quantity
+                })),
                 price: seller.price,
                 payment_status: 'unpaid',
                 shippingInfo: 'Dhaka myshop Warehouse',
                 delivery_status: 'pending',
                 date: timestamp
             }));
-            await authOrderModel.insertMany(authorOrders);
+            await authOrderModel.insertMany(authOrders);
 
-            // Remove from cart
-            const cartIds = products.flatMap(seller => seller.products.map(item => item._id)).filter(Boolean);
-            if (cartIds.length) await cardModel.deleteMany({ _id: { $in: cartIds } });
+            // Clear cart items
+            const cartIds = products.flatMap(seller =>
+                seller.products.map(item => item._id)
+            ).filter(Boolean);
+            if (cartIds.length > 0) {
+                await cardModel.deleteMany({ _id: { $in: cartIds } });
+            }
 
-            // Start cancellation timer (default 2 minutes)
-            const timeoutMs = parseInt(process.env.PAYMENT_TIMEOUT_MS) || 120000;
-            const timer = setTimeout(() => {
-                this.paymentCheck(order.id);
-                this.paymentTimeouts.delete(order.id);
-            }, timeoutMs);
-            this.paymentTimeouts.set(order.id, timer);
+            // Set payment timeout (default 15 minutes)
+            const timeoutMs = parseInt(process.env.PAYMENT_TIMEOUT_MS) || 900000;
+            const timer = setTimeout(() =>
+                this.paymentCheck(order._id),
+                timeoutMs
+            );
+            this.paymentTimeouts.set(order._id.toString(), timer);
 
-            responseReturn(res, 201, { message: 'Order placed successfully', orderId: order.id });
-        } catch (err) {
-            console.error('Place order error:', err.message);
+            responseReturn(res, 201, {
+                message: 'Order placed successfully',
+                orderId: order._id,
+                tx_ref
+            });
+        } catch (error) {
+            console.error('Place order error:', error);
             responseReturn(res, 500, { message: 'Internal server error' });
         }
     }
@@ -289,9 +308,18 @@ class orderController {
     }
 
     create_payment = async (req, res) => {
-        // Generate Flutterwave transaction reference
-        const tx_ref = `ORDER-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-        res.status(200).json({ tx_ref });
+        const { orderId } = req.body;
+
+        try {
+            const order = await customerOrder.findById(orderId);
+            if (!order) {
+                return responseReturn(res, 404, { message: 'Order not found' });
+            }
+            responseReturn(res, 200, { tx_ref: order.flutterwave_ref });
+        } catch (error) {
+            console.error('Create payment error:', error);
+            responseReturn(res, 500, { message: 'Internal server error' });
+        }
     }
 
     // create_payment = async (req, res) => {
@@ -316,56 +344,74 @@ class orderController {
         const { transaction_id } = req.body;
 
         try {
-            // Verify with Flutterwave
+            // Verify payment with Flutterwave
             const verification = await axios.get(
                 `https://api.flutterwave.com/v3/transactions/${transaction_id}/verify`,
                 { headers: { Authorization: `Bearer ${process.env.FLUTTERWAVE_SECRET_KEY}` } }
             );
-            const data = verification.data.data;
-            if (data.status !== 'successful') return responseReturn(res, 400, { message: 'Payment not successful' });
 
-            // Validate order and amount
+            const { status, tx_ref, amount } = verification.data.data;
             const order = await customerOrder.findById(orderId);
-            if (!order) return responseReturn(res, 404, { message: 'Order not found' });
 
-            const paidAmt = Math.round(data.amount * 100);
-            const orderAmt = Math.round(order.price * 100);
-            if (paidAmt !== orderAmt) {
-                return responseReturn(res, 400, { message: `Amount mismatch: paid=${paidAmt / 100}, expected=${orderAmt / 100}` });
+            // Validate payment
+            if (!order) {
+                return responseReturn(res, 404, { message: 'Order not found' });
+            }
+            if (status !== 'successful') {
+                return responseReturn(res, 400, { message: 'Payment not successful' });
+            }
+            if (tx_ref !== order.flutterwave_ref) {
+                return responseReturn(res, 400, { message: 'Transaction reference mismatch' });
+            }
+            if (Math.round(amount) !== Math.round(order.price)) {
+                return responseReturn(res, 400, { message: 'Amount mismatch' });
             }
 
-            // Clear cancellation timer
-            if (this.paymentTimeouts.has(orderId)) {
-                clearTimeout(this.paymentTimeouts.get(orderId));
+            // Clear payment timeout
+            const timeoutId = this.paymentTimeouts.get(orderId);
+            if (timeoutId) {
+                clearTimeout(timeoutId);
                 this.paymentTimeouts.delete(orderId);
             }
 
-            // Update statuses
+            // Update order statuses
             await customerOrder.findByIdAndUpdate(orderId, {
                 payment_status: 'paid',
-                delivery_status: 'pending',
-                flutterwave_ref: data.tx_ref
+                delivery_status: 'processing'
             });
-            await authOrderModel.updateMany({ orderId: new ObjectId(orderId) }, {
-                payment_status: 'paid',
-                delivery_status: 'pending'
+            await authOrderModel.updateMany(
+                { orderId: new ObjectId(orderId) },
+                { payment_status: 'paid', delivery_status: 'processing' }
+            );
+
+            // Update wallets
+            const now = moment();
+            const month = now.month() + 1;
+            const year = now.year();
+
+            await myShopWallet.create({
+                amount: order.price,
+                month,
+                year
             });
 
-            // Credit wallets
-            const now = moment();
-            const month = now.month() + 1, year = now.year();
-            await myShopWallet.create({ amount: order.price, month, year });
-            const authOrders = await authOrderModel.find({ orderId: new ObjectId(orderId) });
-            await Promise.all(authOrders.map(aO =>
-                sellerWallet.create({ sellerId: aO.sellerId, amount: aO.price, month, year })
-            ));
+            const sellerOrders = await authOrderModel.find({ orderId });
+            await Promise.all(sellerOrders.map(async (order) => {
+                await sellerWallet.create({
+                    sellerId: order.sellerId,
+                    amount: order.price,
+                    month,
+                    year
+                });
+            }));
 
             responseReturn(res, 200, { message: 'Payment confirmed successfully' });
-        } catch (err) {
-            console.error('Order confirmation error:', err.response?.data || err.message);
+        } catch (error) {
+            console.error('Order confirmation error:', error);
             responseReturn(res, 500, { message: 'Payment processing failed' });
         }
     }
+
 
     // Webhook to handle asynchronous Flutterwave events
     handle_flutterwave_webhook = async (req, res) => {
