@@ -4,32 +4,14 @@ const customerOrderSchema = new Schema({
     customerId: {
         type: Schema.Types.ObjectId,
         required: true,
-        ref: 'User'  // Reference to user model
     },
     products: {
-        type: [{
-            productId: {
-                type: Schema.Types.ObjectId,
-                required: true,
-                ref: 'Product'
-            },
-            name: String,
-            quantity: Number,
-            price: Number,
-            images: [String]
-        }],
+        type: Array,
         required: true
     },
     price: {
         type: Number,
         required: true,
-        min: [0, 'Price cannot be negative']
-    },
-    currency: {
-        type: String,
-        required: true,
-        default: 'NGN',
-        enum: ['NGN'] // Add other currencies if needed
     },
     payment_status: {
         type: String,
@@ -38,18 +20,8 @@ const customerOrderSchema = new Schema({
         default: 'unpaid'
     },
     shippingInfo: {
-        address: {
-            type: String,
-            required: true
-        },
-        city: {
-            type: String,
-            required: true
-        },
-        phone: {
-            type: String,
-            required: true
-        }
+        type: Object,
+        required: true
     },
     delivery_status: {
         type: String,
@@ -69,7 +41,7 @@ const customerOrderSchema = new Schema({
         type: String,
         index: true
     }
-}, { 
+}, {
     timestamps: true,
     toJSON: { virtuals: true },
     toObject: { virtuals: true }

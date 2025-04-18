@@ -1,47 +1,23 @@
-const { Schema, model } = require('mongoose');
+const { Schema, model } = require('mongoose')
 
 const sellerWalletSchema = new Schema({
     sellerId: {
-        type: Schema.Types.ObjectId,  // Changed from String to ObjectId
-        ref: 'User',                  // Reference to user model
-        required: true,
-        index: true
+        type: String,
+        required: true
     },
     amount: {
         type: Number,
-        required: true,
-        min: [0, 'Amount cannot be negative']
+        required: true
     },
-    month: {  // Fixed typo from "manth" to "month"
+    manth: {
         type: Number,
-        required: true,
-        min: [1, 'Invalid month'],
-        max: [12, 'Invalid month']
+        required: true
     },
     year: {
         type: Number,
-        required: true,
-        min: [2020, 'Invalid year']
-    },
-    orderId: {
-        type: Schema.Types.ObjectId,
-        ref: 'CustomerOrder',
-        index: true
-    },
-    transactionId: {
-        type: String,
-        index: true
-    },
-    currency: {
-        type: String,
-        default: 'NGN',
-        enum: ['NGN'] // Add other currencies if needed
+        required: true
     }
-}, { 
-    timestamps: true,
-    toJSON: { virtuals: true },
-    toObject: { virtuals: true }
-});
+}, { timestamps: true })
 
-// Proper model name casing
-module.exports = model('SellerWallet', sellerWalletSchema);
+
+module.exports = model('sellerWallets', sellerWalletSchema)
