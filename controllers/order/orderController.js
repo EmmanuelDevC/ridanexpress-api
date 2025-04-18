@@ -338,7 +338,7 @@ class orderController {
                     tx_ref: order.flutterwave_ref,
                     amount: order.price,
                     currency: 'NGN',
-                    redirect_url: 'http://localhost:3000/payment-callback',
+                    redirect_url: 'https://ridanexpress-client.vercel.app/payment-callback',
                     customer: {
                         email: 'customer@email.com',
                         name: 'Customer Name'
