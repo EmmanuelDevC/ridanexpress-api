@@ -10,18 +10,18 @@ const customerSchema = new Schema({
   verificationToken: String,
   verificationExpires: Date,
   // New security fields
-  active: { 
-    type: Boolean, 
-    default: true 
+  active: {
+    type: Boolean,
+    default: true
   },
-  tokenVersion: { 
-    type: Number, 
-    default: 0 
+  tokenVersion: {
+    type: Number,
+    default: 0
   },
   lastLogoutAt: Date,
-  sessionValid: { 
-    type: Boolean, 
-    default: true 
+  sessionValid: {
+    type: Boolean,
+    default: true
   }
 }, { timestamps: true });
 

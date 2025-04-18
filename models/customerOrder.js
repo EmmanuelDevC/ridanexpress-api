@@ -1,38 +1,79 @@
-const { Schema, model } = require('mongoose')
+const { Schema, model } = require('mongoose');
 
-const customerOrder = new Schema({
+const customerOrderSchema = new Schema({
     customerId: {
-        type: Schema.ObjectId,
-        required: true
+        type: Schema.Types.ObjectId,
+        required: true,
+        ref: 'User'  // Reference to user model
     },
     products: {
-        type: Array,
+        type: [{
+            productId: {
+                type: Schema.Types.ObjectId,
+                required: true,
+                ref: 'Product'
+            },
+            name: String,
+            quantity: Number,
+            price: Number,
+            images: [String]
+        }],
         required: true
     },
     price: {
         type: Number,
-        required: true
+        required: true,
+        min: [0, 'Price cannot be negative']
+    },
+    currency: {
+        type: String,
+        required: true,
+        default: 'NGN',
+        enum: ['NGN'] // Add other currencies if needed
     },
     payment_status: {
         type: String,
-        required: true
+        required: true,
+        enum: ['unpaid', 'paid', 'failed', 'refunded'],
+        default: 'unpaid'
     },
     shippingInfo: {
-        type: Object,
-        required: true
+        address: {
+            type: String,
+            required: true
+        },
+        city: {
+            type: String,
+            required: true
+        },
+        phone: {
+            type: String,
+            required: true
+        }
     },
     delivery_status: {
         type: String,
-        required: true
+        required: true,
+        enum: ['pending', 'processing', 'shipped', 'delivered', 'cancelled'],
+        default: 'pending'
     },
-    date: {
-        type: String,
-        required: true
+    payment_date: {
+        type: Date
     },
     flutterwave_ref: {
         type: String,
-        unique: true
+        unique: true,
+        index: true
+    },
+    transaction_id: {
+        type: String,
+        index: true
     }
-}, { timestamps: true })
+}, { 
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
+});
 
-module.exports = model('customerOrders', customerOrder)
+// Remove the trailing "4" from model name
+module.exports = model('CustomerOrder', customerOrderSchema);

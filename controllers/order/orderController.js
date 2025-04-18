@@ -430,7 +430,7 @@ class orderController {
             const order = await customerOrder.findById(orderId);
 
             // Validate payment
-            if (!verification.data.status === 'success') {
+            if (verification.data.status !== 'success') {
                 return responseReturn(res, 400, { message: 'Payment verification failed' });
             }
             if (!order) return responseReturn(res, 404, { message: 'Order not found' });
@@ -485,50 +485,142 @@ class orderController {
     }
 
     // Webhook to handle asynchronous Flutterwave events
-    handle_flutterwave_webhook = async (req, res) => {
-        const signature = req.headers['verif-hash'];
-        if (signature !== process.env.FLUTTERWAVE_WEBHOOK_HASH) {
-            console.warn('Invalid webhook signature:', signature);
-            return res.status(401).send('Unauthorized');
+     handle_flutterwave_webhook = async (req, res) => {
+        const signature = req.headers['verif-hash'] || req.headers['Verif-Hash'];
+        
+        // 1. Validate webhook signature
+        if (!signature || signature !== process.env.FLUTTERWAVE_WEBHOOK_HASH) {
+            console.warn('Invalid webhook signature');
+            return res.status(401).json({ 
+                status: 'error', 
+                message: 'Unauthorized' 
+            });
         }
 
+        const session = await mongoose.startSession();
+        session.startTransaction();
+        
         try {
             const event = req.body;
+            
+            // 2. Process only successful charges
             if (event.event === 'charge.completed') {
-                const txRef = event.data.tx_ref;
-                const order = await customerOrder.findOneAndUpdate(
-                    { flutterwave_ref: txRef },
-                    { payment_status: 'paid', delivery_status: 'pending' },
-                    { new: true }
-                );
-                if (order) {
-                    // Update seller suborders
-                    await authOrderModel.updateMany(
-                        { orderId: new ObjectId(order._id) },
-                        { payment_status: 'paid', delivery_status: 'pending' }
-                    );
-
-                    // Clear timeout
-                    const key = order._id.toString();
-                    if (this.paymentTimeouts.has(key)) {
-                        clearTimeout(this.paymentTimeouts.get(key));
-                        this.paymentTimeouts.delete(key);
-                    }
-
-                    // Credit wallets
-                    const now = moment();
-                    const month = now.month() + 1, year = now.year();
-                    await myShopWallet.create({ amount: order.price, month, year });
-                    const authOrders = await authOrderModel.find({ orderId: order._id });
-                    await Promise.all(authOrders.map(aO =>
-                        sellerWallet.create({ sellerId: aO.sellerId, amount: aO.price, month, year })
-                    ));
+                const transaction = event.data;
+                const txRef = transaction.tx_ref;
+                
+                // 3. Validate transaction
+                if (transaction.status !== 'successful') {
+                    console.log(`Transaction ${txRef} not successful: ${transaction.status}`);
+                    return res.status(200).end();
                 }
+
+                // 4. Find and validate order
+                const order = await customerOrder.findOne({ 
+                    flutterwave_ref: txRef 
+                }).session(session);
+
+                if (!order) {
+                    console.error(`Order not found for tx_ref: ${txRef}`);
+                    return res.status(404).end();
+                }
+
+                // 5. Check if already processed
+                if (order.payment_status === 'paid') {
+                    console.log(`Order ${order._id} already marked as paid`);
+                    return res.status(200).end();
+                }
+
+                // 6. Validate amount (convert to kobo/pesewas)
+                const paidAmount = parseFloat(transaction.amount);
+                const orderAmount = parseFloat(order.price);
+                
+                if (Math.abs(paidAmount - orderAmount) > 0.01) {
+                    console.error(`Amount mismatch for order ${order._id}: 
+                        Paid ${paidAmount} vs Order ${orderAmount}`);
+                    throw new Error('Amount mismatch');
+                }
+
+                // 7. Update order statuses
+                await customerOrder.findByIdAndUpdate(
+                    order._id,
+                    {
+                        payment_status: 'paid',
+                        delivery_status: 'processing',
+                        payment_date: new Date()
+                    },
+                    { session }
+                );
+
+                await authOrderModel.updateMany(
+                    { orderId: order._id },
+                    {
+                        payment_status: 'paid',
+                        delivery_status: 'processing'
+                    },
+                    { session }
+                );
+
+                // 8. Clear payment timeout
+                const timeoutId = this.paymentTimeouts.get(order._id.toString());
+                if (timeoutId) {
+                    clearTimeout(timeoutId);
+                    this.paymentTimeouts.delete(order._id.toString());
+                    console.log(`Cleared timeout for order ${order._id}`);
+                }
+
+                // 9. Credit wallets
+                const now = moment();
+                const month = now.month() + 1;
+                const year = now.year();
+
+                // Credit main shop wallet
+                await myShopWallet.create([{
+                    amount: order.price,
+                    month,
+                    year,
+                    orderId: order._id,
+                    transactionId: transaction.id
+                }], { session });
+
+                // Credit individual seller wallets
+                const sellerOrders = await authOrderModel.find(
+                    { orderId: order._id }
+                ).session(session);
+
+                await Promise.all(sellerOrders.map(async (sellerOrder) => {
+                    await sellerWallet.create([{
+                        sellerId: sellerOrder.sellerId,
+                        amount: sellerOrder.price,
+                        month,
+                        year,
+                        orderId: order._id,
+                        transactionId: transaction.id
+                    }], { session });
+                }));
+
+                // 10. Commit transaction
+                await session.commitTransaction();
+                console.log(`Successfully processed payment for order ${order._id}`);
+
+                return res.status(200).end();
+            } else {
+                console.log(`Ignoring non-payment event: ${event.event}`);
+                return res.status(200).end();
             }
-            res.status(200).end();
-        } catch (err) {
-            console.error('Webhook processing error:', err);
-            res.status(500).end();
+        } catch (error) {
+            // 11. Abort transaction on error
+            await session.abortTransaction();
+            console.error('Webhook processing error:', {
+                error: error.message,
+                stack: error.stack,
+                event: req.body
+            });
+            return res.status(500).json({
+                status: 'error',
+                message: 'Internal server error'
+            });
+        } finally {
+            session.endSession();
         }
     }
 
