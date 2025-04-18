@@ -8,6 +8,7 @@ router.get('/home/customer/gat-orders/:customerId/:status', orderController.get_
 router.get('/home/customer/gat-order/:orderId', orderController.get_order)
 router.post('/order/create-payment', orderController.create_payment)
 router.get('/order/confirm/:orderId', orderController.order_confirm)
+router.post('/flutterwave-webhook', orderController.handle_flutterwave_webhook);
 
 // --- admin
 router.get('/admin/orders', orderController.get_admin_orders)

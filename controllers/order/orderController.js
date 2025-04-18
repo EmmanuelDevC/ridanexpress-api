@@ -309,16 +309,87 @@ class orderController {
 
     create_payment = async (req, res) => {
         const { orderId } = req.body;
-
+    
         try {
+            // 1. Add environment variable check
+            if (!process.env.FLUTTERWAVE_SECRET_KEY) {
+                console.error('FLUTTERWAVE_SECRET_KEY is missing in environment variables');
+                return responseReturn(res, 500, { message: 'Payment system error' });
+            }
+    
             const order = await customerOrder.findById(orderId);
             if (!order) {
+                console.error(`Order not found: ${orderId}`);
                 return responseReturn(res, 404, { message: 'Order not found' });
             }
-            responseReturn(res, 200, { tx_ref: order.flutterwave_ref });
+    
+            // 2. Log the payment initialization details
+            console.log('Initializing payment with:', {
+                tx_ref: order.flutterwave_ref,
+                amount: order.price,
+                currency: 'NGN',
+                secret_key: process.env.FLUTTERWAVE_SECRET_KEY?.slice(0, 5) + '...' // Partial key for security
+            });
+    
+            // 3. Add full error logging for Flutterwave API call
+            const flutterResponse = await axios.post(
+                'https://api.flutterwave.com/v3/payments',
+                {
+                    tx_ref: order.flutterwave_ref,
+                    amount: order.price,
+                    currency: 'NGN',
+                    redirect_url: 'http://localhost:3000/payment-callback',
+                    customer: {
+                        email: 'customer@email.com',
+                        name: 'Customer Name'
+                    }
+                },
+                {
+                    headers: {
+                        Authorization: `Bearer ${process.env.FLUTTERWAVE_SECRET_KEY}`,
+                        'Content-Type': 'application/json'
+                    },
+                    timeout: 10000 // 10 seconds timeout
+                }
+            ).catch(error => {
+                // 4. Detailed error logging
+                console.error('Flutterwave API Error:', {
+                    status: error.response?.status,
+                    data: error.response?.data,
+                    config: {
+                        url: error.config?.url,
+                        method: error.config?.method,
+                        headers: {
+                            authorization: error.config?.headers?.Authorization?.slice(0, 5) + '...'
+                        }
+                    },
+                    message: error.message
+                });
+                throw error;
+            });
+    
+            // 5. Log successful response
+            console.log('Flutterwave Response:', {
+                status: flutterResponse.status,
+                data: flutterResponse.data
+            });
+    
+            responseReturn(res, 200, { 
+                tx_ref: order.flutterwave_ref,
+                payment_link: flutterResponse.data.data.link
+            });
         } catch (error) {
-            console.error('Create payment error:', error);
-            responseReturn(res, 500, { message: 'Internal server error' });
+            // 6. Final error logging
+            console.error('Create Payment Endpoint Error:', {
+                error: error.stack, // Full error stack trace
+                environment: process.env.NODE_ENV,
+                orderId,
+                secretKeyPresent: !!process.env.FLUTTERWAVE_SECRET_KEY
+            });
+            
+            responseReturn(res, 500, { 
+                message: error.response?.data?.message || 'Payment initialization failed' 
+            });
         }
     }
 
@@ -344,7 +415,12 @@ class orderController {
         const { transaction_id } = req.body;
 
         try {
-            // Verify payment with Flutterwave
+            // Validate credentials
+            if (!process.env.FLUTTERWAVE_SECRET_KEY) {
+                return responseReturn(res, 500, { message: 'Payment system error' });
+            }
+
+            // Verify payment
             const verification = await axios.get(
                 `https://api.flutterwave.com/v3/transactions/${transaction_id}/verify`,
                 { headers: { Authorization: `Bearer ${process.env.FLUTTERWAVE_SECRET_KEY}` } }
@@ -354,33 +430,33 @@ class orderController {
             const order = await customerOrder.findById(orderId);
 
             // Validate payment
-            if (!order) {
-                return responseReturn(res, 404, { message: 'Order not found' });
+            if (!verification.data.status === 'success') {
+                return responseReturn(res, 400, { message: 'Payment verification failed' });
             }
-            if (status !== 'successful') {
-                return responseReturn(res, 400, { message: 'Payment not successful' });
-            }
-            if (tx_ref !== order.flutterwave_ref) {
-                return responseReturn(res, 400, { message: 'Transaction reference mismatch' });
-            }
-            if (Math.round(amount) !== Math.round(order.price)) {
+            if (!order) return responseReturn(res, 404, { message: 'Order not found' });
+            if (status !== 'successful') return responseReturn(res, 400, { message: 'Payment failed' });
+            if (tx_ref !== order.flutterwave_ref) return responseReturn(res, 400, { message: 'Transaction mismatch' });
+
+            // Critical Fix: Convert order.price to kobo
+            if (Math.round(amount) !== Math.round(order.price * 100)) {
                 return responseReturn(res, 400, { message: 'Amount mismatch' });
             }
 
-            // Clear payment timeout
-            const timeoutId = this.paymentTimeouts.get(orderId);
+            // Clear timeout using MongoDB _id
+            const timeoutId = this.paymentTimeouts.get(order._id.toString());
             if (timeoutId) {
                 clearTimeout(timeoutId);
-                this.paymentTimeouts.delete(orderId);
+                this.paymentTimeouts.delete(order._id.toString());
             }
 
-            // Update order statuses
+            // Update orders
             await customerOrder.findByIdAndUpdate(orderId, {
                 payment_status: 'paid',
                 delivery_status: 'processing'
             });
+
             await authOrderModel.updateMany(
-                { orderId: new ObjectId(orderId) },
+                { orderId: order._id },
                 { payment_status: 'paid', delivery_status: 'processing' }
             );
 
@@ -389,29 +465,24 @@ class orderController {
             const month = now.month() + 1;
             const year = now.year();
 
-            await myShopWallet.create({
-                amount: order.price,
-                month,
-                year
-            });
+            await myShopWallet.create({ amount: order.price, month, year });
 
-            const sellerOrders = await authOrderModel.find({ orderId });
-            await Promise.all(sellerOrders.map(async (order) => {
+            const sellerOrders = await authOrderModel.find({ orderId: order._id });
+            await Promise.all(sellerOrders.map(async (sellerOrder) => {
                 await sellerWallet.create({
-                    sellerId: order.sellerId,
-                    amount: order.price,
+                    sellerId: sellerOrder.sellerId,
+                    amount: sellerOrder.price,
                     month,
                     year
                 });
             }));
 
-            responseReturn(res, 200, { message: 'Payment confirmed successfully' });
+            responseReturn(res, 200, { message: 'Payment confirmed' });
         } catch (error) {
-            console.error('Order confirmation error:', error);
+            console.error('Confirmation error:', error);
             responseReturn(res, 500, { message: 'Payment processing failed' });
         }
     }
-
 
     // Webhook to handle asynchronous Flutterwave events
     handle_flutterwave_webhook = async (req, res) => {
