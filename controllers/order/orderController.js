@@ -1,20 +1,24 @@
-const authOrderModel = require('../../models/authOrder')
-const customerOrder = require('../../models/customerOrder')
-const cardModel = require('../../models/cardModel')
-const myShopWallet = require('../../models/myShopWallet')
-const sellerWallet = require('../../models/sellerWallet')
-const axios = require('axios')
-const { mongo: { ObjectId } } = require('mongoose')
-const { responseReturn } = require('../../utiles/response')
-const moment = require('moment')
+const authOrderModel = require('../../models/authOrder');
+const customerOrder = require('../../models/customerOrder');
+const cardModel = require('../../models/cardModel');
+const myShopWallet = require('../../models/myShopWallet');
+const sellerWallet = require('../../models/sellerWallet');
+const axios = require('axios');
+const { mongo: { ObjectId, startSession } } = require('mongoose');
+const { responseReturn } = require('../../utiles/response');
+const moment = require('moment');
 
 class orderController {
     constructor() {
         this.paymentTimeouts = new Map();
+        this.generateTxRef = this.generateTxRef.bind(this);
+        this.place_order = this.place_order.bind(this);
     }
+
+    // ==================== CORE METHODS ====================
     generateTxRef = () => `ORDER-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-    // Cancel unpaid orders after timeout
-    paymentCheck = async (orderId) => {
+
+    async paymentCheck(orderId) {
         try {
             const order = await customerOrder.findById(orderId);
             if (order && order.payment_status === 'unpaid') {
@@ -26,22 +30,19 @@ class orderController {
                     { orderId },
                     { delivery_status: 'cancelled' }
                 );
-                console.log(`Order ${orderId} cancelled due to unpaid status`);
             }
         } catch (error) {
             console.error('Payment check error:', error);
         }
     }
 
-    place_order = async (req, res) => {
+    // ==================== CUSTOMER ROUTES ====================
+    async place_order(req, res) {
         const { price, products, shipping_fee, shippingInfo, userId } = req.body;
         const timestamp = moment().format('LLL');
 
         try {
-            // Generate unique transaction reference
             const tx_ref = this.generateTxRef();
-
-            // Create customer order with tx_ref
             const order = await customerOrder.create({
                 customerId: userId,
                 shippingInfo,
@@ -58,7 +59,6 @@ class orderController {
                 date: timestamp
             });
 
-            // Create seller orders
             const authOrders = products.map(seller => ({
                 orderId: order._id,
                 sellerId: seller.sellerId,
@@ -72,22 +72,19 @@ class orderController {
                 delivery_status: 'pending',
                 date: timestamp
             }));
+
             await authOrderModel.insertMany(authOrders);
 
-            // Clear cart items
             const cartIds = products.flatMap(seller =>
                 seller.products.map(item => item._id)
-            ).filter(Boolean);
+                    .filter(Boolean));
+
             if (cartIds.length > 0) {
                 await cardModel.deleteMany({ _id: { $in: cartIds } });
             }
 
-            // Set payment timeout (default 15 minutes)
             const timeoutMs = parseInt(process.env.PAYMENT_TIMEOUT_MS) || 900000;
-            const timer = setTimeout(() =>
-                this.paymentCheck(order._id),
-                timeoutMs
-            );
+            const timer = setTimeout(() => this.paymentCheck(order._id), timeoutMs);
             this.paymentTimeouts.set(order._id.toString(), timer);
 
             responseReturn(res, 201, {
@@ -95,133 +92,204 @@ class orderController {
                 orderId: order._id,
                 tx_ref
             });
+
         } catch (error) {
             console.error('Place order error:', error);
             responseReturn(res, 500, { message: 'Internal server error' });
         }
     }
 
-
-    get_customer_databorad_data = async (req, res) => {
-        const {
-            userId
-        } = req.params
-
+    async get_customer_databorad_data(req, res) {
+        const { userId } = req.params;
         try {
-            const recentOrders = await customerOrder.find({
-                customerId: new ObjectId(userId)
-            }).limit(5)
-            const pendingOrder = await customerOrder.find({
-                customerId: new ObjectId(userId),
-                delivery_status: 'pending'
-            }).countDocuments()
-            const totalOrder = await customerOrder.find({
-                customerId: new ObjectId(userId)
-            }).countDocuments()
-            const cancelledOrder = await customerOrder.find({
-                customerId: new ObjectId(userId),
-                delivery_status: 'cancelled'
-            }).countDocuments()
+            const recentOrders = await customerOrder.find({ customerId: new ObjectId(userId) }).limit(5);
+            const counts = await Promise.all([
+                customerOrder.countDocuments({ customerId: new ObjectId(userId), delivery_status: 'pending' }),
+                customerOrder.countDocuments({ customerId: new ObjectId(userId) }),
+                customerOrder.countDocuments({ customerId: new ObjectId(userId), delivery_status: 'cancelled' })
+            ]);
+
             responseReturn(res, 200, {
                 recentOrders,
-                pendingOrder,
-                cancelledOrder,
-                totalOrder
-            })
+                pendingOrder: counts[0],
+                totalOrder: counts[1],
+                cancelledOrder: counts[2]
+            });
         } catch (error) {
-            console.log(error.message)
+            console.log(error.message);
+            responseReturn(res, 500, { message: 'Server error' });
         }
     }
 
-    get_orders = async (req, res) => {
-        const {
-            customerId,
-            status
-        } = req.params
-
+    async get_orders(req, res) {
+        const { customerId, status } = req.params;
         try {
-            let orders = []
-            if (status !== 'all') {
-                orders = await customerOrder.find({
-                    customerId: new ObjectId(customerId),
-                    delivery_status: status
-                })
-            } else {
-                orders = await customerOrder.find({
-                    customerId: new ObjectId(customerId)
-                })
+            const query = { customerId: new ObjectId(customerId) };
+            if (status !== 'all') query.delivery_status = status;
+
+            const orders = await customerOrder.find(query);
+            responseReturn(res, 200, { orders });
+        } catch (error) {
+            console.log(error.message);
+            responseReturn(res, 500, { message: 'Server error' });
+        }
+    }
+
+    async get_order(req, res) {
+        const { orderId } = req.params;
+        try {
+            const order = await customerOrder.findById(orderId);
+            responseReturn(res, 200, { order });
+        } catch (error) {
+            console.log(error.message);
+            responseReturn(res, 500, { message: 'Server error' });
+        }
+    }
+
+    // ==================== PAYMENT METHODS ====================
+    async create_payment(req, res) {
+        const { orderId } = req.body;
+        try {
+            if (!process.env.FLUTTERWAVE_SECRET_KEY) {
+                return responseReturn(res, 500, { message: 'Payment system error' });
             }
+
+            const order = await customerOrder.findById(orderId);
+            const response = await axios.post(
+                'https://api.flutterwave.com/v3/payments',
+                {
+                    tx_ref: order.flutterwave_ref,
+                    amount: order.price,
+                    currency: 'NGN',
+                    redirect_url: 'https://ridanexpress.vercel.app/payment-callback',
+                    customer: { email: 'customer@email.com', name: 'Customer Name' }
+                },
+                {
+                    headers: { Authorization: `Bearer ${process.env.FLUTTERWAVE_SECRET_KEY}` },
+                    timeout: 10000
+                }
+            );
+
             responseReturn(res, 200, {
-                orders
-            })
+                tx_ref: order.flutterwave_ref,
+                payment_link: response.data.data.link
+            });
+
         } catch (error) {
-            console.log(error.message)
+            console.error('Payment error:', error);
+            responseReturn(res, 500, { message: 'Payment initialization failed' });
         }
     }
-    get_order = async (req, res) => {
-        const {
-            orderId
-        } = req.params
+
+    async order_confirm(req, res) {
+        const { orderId } = req.params;
+        const { transaction_id } = req.body;
+        const session = await startSession();
 
         try {
-            const order = await customerOrder.findById(orderId)
-            responseReturn(res, 200, {
-                order
-            })
-        } catch (error) {
-            console.log(error.message)
-        }
-    }
-
-    get_admin_orders = async (req, res) => {
-        let { page, parPage, searchValue } = req.query
-        page = parseInt(page)
-        parPage = parseInt(parPage)
-
-        const skipPage = parPage * (page - 1)
-
-        try {
-            if (searchValue) {
-
-            } else {
-                const orders = await customerOrder.aggregate([
-                    {
-                        $lookup: {
-                            from: 'authororders',
-                            localField: "_id",
-                            foreignField: 'orderId',
-                            as: 'suborder'
-                        }
-                    }
-                ]).skip(skipPage).limit(parPage).sort({ createdAt: -1 })
-
-                const totalOrder = await customerOrder.aggregate([
-                    {
-                        $lookup: {
-                            from: 'authororders',
-                            localField: "_id",
-                            foreignField: 'orderId',
-                            as: 'suborder'
-                        }
-                    }
-                ])
-
-                responseReturn(res, 200, { orders, totalOrder: totalOrder.length })
+            // Validate inputs
+            if (!transaction_id || transaction_id.length < 10) {
+                throw new Error('Invalid transaction ID');
             }
+
+            if (!process.env.FLUTTERWAVE_SECRET_KEY) {
+                throw new Error('Payment system configuration error');
+            }
+
+            session.startTransaction();
+
+            // 1. Verify payment with Flutterwave
+            const verification = await axios.get(
+                `https://api.flutterwave.com/v3/transactions/${transaction_id}/verify`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${process.env.FLUTTERWAVE_SECRET_KEY}`
+                    },
+                    timeout: 20000
+                }
+            );
+
+            // 2. Validate verification response
+            if (verification.data.status !== 'success') {
+                console.error('Flutterwave verification failed:', verification.data);
+                throw new Error('Payment verification failed');
+            }
+
+            const paymentData = verification.data.data;
+
+            // 3. Get and validate order
+            const order = await customerOrder.findById(orderId).session(session);
+            if (!order) throw new Error('Order not found');
+            if (order.payment_status === 'paid') {
+                throw new Error('Payment already processed');
+            }
+
+            // 4. Validate transaction details
+            const validationChecks = [
+                paymentData.status === 'successful',
+                paymentData.currency === 'NGN',
+                paymentData.tx_ref === order.flutterwave_ref,
+                parseInt(paymentData.amount) === parseInt(order.price)
+            ];
+
+            if (!validationChecks.every(check => check)) {
+                console.error('Validation failed:', {
+                    status: paymentData.status,
+                    currency: paymentData.currency,
+                    tx_ref: paymentData.tx_ref,
+                    amount: paymentData.amount,
+                    orderPrice: order.price
+                });
+                throw new Error('Transaction validation failed');
+            }
+
+            // 5. Process payment
+            await this.handlePaymentSuccess(orderId, session);
+            await session.commitTransaction();
+
+            responseReturn(res, 200, { message: 'Payment confirmed successfully' });
+
         } catch (error) {
-            console.log(error.message)
+            await session.abortTransaction();
+            console.error('Payment confirmation error:', {
+                orderId,
+                error: error.message,
+                stack: error.stack
+            });
+            responseReturn(res, 500, { message: error.message });
+        } finally {
+            session.endSession();
         }
     }
 
-    get_admin_order = async (req, res) => {
+    // ==================== ADMIN ROUTES ====================
+    async get_admin_orders(req, res) {
+        try {
+            const orders = await customerOrder.aggregate([
+                {
+                    $lookup: {
+                        from: 'authororders',
+                        localField: "_id",
+                        foreignField: 'orderId',
+                        as: 'suborder'
+                    }
+                },
+                { $sort: { createdAt: -1 } }
+            ]);
 
-        const { orderId } = req.params
+            responseReturn(res, 200, { orders, totalOrder: orders.length });
+        } catch (error) {
+            console.log(error.message);
+            responseReturn(res, 500, { message: 'Server error' });
+        }
+    }
 
+    async get_admin_order(req, res) {
+        const { orderId } = req.params;
         try {
             const order = await customerOrder.aggregate([
+                { $match: { _id: new ObjectId(orderId) } },
                 {
-                    $match: { _id: new ObjectId(orderId) }
-                }, {
                     $lookup: {
                         from: 'authororders',
                         localField: '_id',
@@ -229,348 +297,127 @@ class orderController {
                         as: 'suborder'
                     }
                 }
-            ])
-            responseReturn(res, 200, { order: order[0] })
+            ]);
+            responseReturn(res, 200, { order: order[0] });
         } catch (error) {
-            console.log('get admin order ' + error.message)
+            console.log(error.message);
+            responseReturn(res, 500, { message: 'Server error' });
         }
     }
 
-    admin_order_status_update = async (req, res) => {
-        const { orderId } = req.params
-        const { status } = req.body
-
-        try {
-            await customerOrder.findByIdAndUpdate(orderId, {
-                delivery_status: status
-            })
-            responseReturn(res, 200, { message: 'order status change success' })
-        } catch (error) {
-            console.log('get admin order status error ' + error.message)
-            responseReturn(res, 500, { message: 'internal server error' })
-        }
-    }
-
-    get_seller_orders = async (req, res) => {
-
-        const { sellerId } = req.params
-        let { page, parPage, searchValue } = req.query
-        page = parseInt(page)
-        parPage = parseInt(parPage)
-
-        const skipPage = parPage * (page - 1)
-
-
-        try {
-            if (searchValue) {
-
-            } else {
-                const orders = await authOrderModel.find({
-                    sellerId,
-                }).skip(skipPage).limit(parPage).sort({ createdAt: -1 })
-                const totalOrder = await authOrderModel.find({
-                    sellerId,
-                }).countDocuments()
-                responseReturn(res, 200, { orders, totalOrder })
-            }
-        } catch (error) {
-            console.log('get seller order error ' + error.message)
-            responseReturn(res, 500, { message: 'internal server error' })
-        }
-    }
-
-    get_seller_order = async (req, res) => {
-
-        const { orderId } = req.params
-
-        try {
-            const order = await authOrderModel.findById(orderId)
-
-            responseReturn(res, 200, { order })
-        } catch (error) {
-            console.log('get admin order ' + error.message)
-        }
-    }
-
-    seller_order_status_update = async (req, res) => {
-        const { orderId } = req.params
-        const { status } = req.body
-
-        try {
-            await authOrderModel.findByIdAndUpdate(orderId, {
-                delivery_status: status
-            })
-            responseReturn(res, 200, { message: 'order status change success' })
-        } catch (error) {
-            console.log('get admin order status error ' + error.message)
-            responseReturn(res, 500, { message: 'internal server error' })
-        }
-    }
-
-    create_payment = async (req, res) => {
-        const { orderId } = req.body;
-    
-        try {
-            // 1. Add environment variable check
-            if (!process.env.FLUTTERWAVE_SECRET_KEY) {
-                console.error('FLUTTERWAVE_SECRET_KEY is missing in environment variables');
-                return responseReturn(res, 500, { message: 'Payment system error' });
-            }
-    
-            const order = await customerOrder.findById(orderId);
-            if (!order) {
-                console.error(`Order not found: ${orderId}`);
-                return responseReturn(res, 404, { message: 'Order not found' });
-            }
-    
-            // 2. Log the payment initialization details
-            console.log('Initializing payment with:', {
-                tx_ref: order.flutterwave_ref,
-                amount: order.price,
-                currency: 'NGN',
-                secret_key: process.env.FLUTTERWAVE_SECRET_KEY?.slice(0, 5) + '...' // Partial key for security
-            });
-    
-            // 3. Add full error logging for Flutterwave API call
-            const flutterResponse = await axios.post(
-                'https://api.flutterwave.com/v3/payments',
-                {
-                    tx_ref: order.flutterwave_ref,
-                    amount: order.price,
-                    currency: 'NGN',
-                    redirect_url: 'https://ridanexpress.vercel.app/payment-callback',
-                    customer: {
-                        email: 'customer@email.com',
-                        name: 'Customer Name'
-                    }
-                },
-                {
-                    headers: {
-                        Authorization: `Bearer ${process.env.FLUTTERWAVE_SECRET_KEY}`,
-                        'Content-Type': 'application/json'
-                    },
-                    timeout: 10000 // 10 seconds timeout
-                }
-            ).catch(error => {
-                // 4. Detailed error logging
-                console.error('Flutterwave API Error:', {
-                    status: error.response?.status,
-                    data: error.response?.data,
-                    config: {
-                        url: error.config?.url,
-                        method: error.config?.method,
-                        headers: {
-                            authorization: error.config?.headers?.Authorization?.slice(0, 5) + '...'
-                        }
-                    },
-                    message: error.message
-                });
-                throw error;
-            });
-    
-            // 5. Log successful response
-            console.log('Flutterwave Response:', {
-                status: flutterResponse.status,
-                data: flutterResponse.data
-            });
-    
-            responseReturn(res, 200, { 
-                tx_ref: order.flutterwave_ref,
-                payment_link: flutterResponse.data.data.link
-            });
-        } catch (error) {
-            // 6. Final error logging
-            console.error('Create Payment Endpoint Error:', {
-                error: error.stack, // Full error stack trace
-                environment: process.env.NODE_ENV,
-                orderId,
-                secretKeyPresent: !!process.env.FLUTTERWAVE_SECRET_KEY
-            });
-            
-            responseReturn(res, 500, { 
-                message: error.response?.data?.message || 'Payment initialization failed' 
-            });
-        }
-    }
-
-    // create_payment = async (req, res) => {
-    //     const { price } = req.body
-
-    //     try {
-    //         const payment = await stripe.paymentIntents.create({
-    //             amount: price * 100,
-    //             currency: 'usd',
-    //             automatic_payment_methods: {
-    //                 enabled: true
-    //             }
-    //         })
-    //         responseReturn(res, 200, { clientSecret: payment.client_secret })
-    //     } catch (error) {
-    //         console.log(error.message)
-    //     }
-    // }
-
-    order_confirm = async (req, res) => {
+    async admin_order_status_update(req, res) {
         const { orderId } = req.params;
-        const { transaction_id } = req.body;
-
+        const { status } = req.body;
         try {
-            // Validate credentials
-            if (!process.env.FLUTTERWAVE_SECRET_KEY) {
-                return responseReturn(res, 500, { message: 'Payment system error' });
-            }
-
-            // Verify payment
-            const verification = await axios.get(
-                `https://api.flutterwave.com/v3/transactions/${transaction_id}/verify`,
-                { headers: { Authorization: `Bearer ${process.env.FLUTTERWAVE_SECRET_KEY}` } }
-            );
-
-            const { status, tx_ref, amount } = verification.data.data;
-            const order = await customerOrder.findById(orderId);
-
-            // Validate payment
-            if (!verification.data.status === 'success') {
-                return responseReturn(res, 400, { message: 'Payment verification failed' });
-            }
-            if (!order) return responseReturn(res, 404, { message: 'Order not found' });
-            if (status !== 'successful') return responseReturn(res, 400, { message: 'Payment failed' });
-            if (tx_ref !== order.flutterwave_ref) return responseReturn(res, 400, { message: 'Transaction mismatch' });
-
-            // Critical Fix: Convert order.price to kobo
-            if (Math.round(amount) !== Math.round(order.price * 100)) {
-                return responseReturn(res, 400, { message: 'Amount mismatch' });
-            }
-
-            // Clear timeout using MongoDB _id
-            const timeoutId = this.paymentTimeouts.get(order._id.toString());
-            if (timeoutId) {
-                clearTimeout(timeoutId);
-                this.paymentTimeouts.delete(order._id.toString());
-            }
-
-            // Update orders
-            await customerOrder.findByIdAndUpdate(orderId, {
-                payment_status: 'paid',
-                delivery_status: 'processing'
-            });
-
-            await authOrderModel.updateMany(
-                { orderId: order._id },
-                { payment_status: 'paid', delivery_status: 'processing' }
-            );
-
-            // Update wallets
-            const now = moment();
-            const month = now.month() + 1;
-            const year = now.year();
-
-            await myShopWallet.create({ amount: order.price, month, year });
-
-            const sellerOrders = await authOrderModel.find({ orderId: order._id });
-            await Promise.all(sellerOrders.map(async (sellerOrder) => {
-                await sellerWallet.create({
-                    sellerId: sellerOrder.sellerId,
-                    amount: sellerOrder.price,
-                    month,
-                    year
-                });
-            }));
-
-            responseReturn(res, 200, { message: 'Payment confirmed' });
+            await customerOrder.findByIdAndUpdate(orderId, { delivery_status: status });
+            responseReturn(res, 200, { message: 'Status updated' });
         } catch (error) {
-            console.error('Confirmation error:', error);
-            responseReturn(res, 500, { message: 'Payment processing failed' });
+            console.log(error.message);
+            responseReturn(res, 500, { message: 'Update failed' });
         }
     }
 
-    // Webhook to handle asynchronous Flutterwave events
-    handle_flutterwave_webhook = async (req, res) => {
+    // ==================== SELLER ROUTES ====================
+    async get_seller_orders(req, res) {
+        const { sellerId } = req.params;
+        try {
+            const orders = await authOrderModel.find({ sellerId }).sort('-createdAt');
+            responseReturn(res, 200, { orders, totalOrder: orders.length });
+        } catch (error) {
+            console.log(error.message);
+            responseReturn(res, 500, { message: 'Server error' });
+        }
+    }
+
+    async get_seller_order(req, res) {
+        const { orderId } = req.params;
+        try {
+            const order = await authOrderModel.findById(orderId);
+            responseReturn(res, 200, { order });
+        } catch (error) {
+            console.log(error.message);
+            responseReturn(res, 500, { message: 'Server error' });
+        }
+    }
+
+    async seller_order_status_update(req, res) {
+        const { orderId } = req.params;
+        const { status } = req.body;
+        try {
+            await authOrderModel.findByIdAndUpdate(orderId, { delivery_status: status });
+            responseReturn(res, 200, { message: 'Status updated' });
+        } catch (error) {
+            console.log(error.message);
+            responseReturn(res, 500, { message: 'Update failed' });
+        }
+    }
+
+    // ==================== WEBHOOK HANDLER ====================
+    async handle_flutterwave_webhook(req, res) {
         const signature = req.headers['verif-hash'];
         if (signature !== process.env.FLUTTERWAVE_WEBHOOK_HASH) {
-            console.warn('Invalid webhook signature:', signature);
             return res.status(401).send('Unauthorized');
         }
 
         try {
             const event = req.body;
             if (event.event === 'charge.completed') {
-                const txRef = event.data.tx_ref;
-                const order = await customerOrder.findOneAndUpdate(
-                    { flutterwave_ref: txRef },
-                    { payment_status: 'paid', delivery_status: 'pending' },
-                    { new: true }
-                );
-                if (order) {
-                    // Update seller suborders
-                    await authOrderModel.updateMany(
-                        { orderId: new ObjectId(order._id) },
-                        { payment_status: 'paid', delivery_status: 'pending' }
-                    );
+                const session = await startSession();
+                session.startTransaction();
 
-                    // Clear timeout
-                    const key = order._id.toString();
-                    if (this.paymentTimeouts.has(key)) {
-                        clearTimeout(this.paymentTimeouts.get(key));
-                        this.paymentTimeouts.delete(key);
+                try {
+                    const txRef = event.data.tx_ref;
+                    const order = await customerOrder.findOne({ flutterwave_ref: txRef }).session(session);
+
+                    if (order && order.payment_status !== 'paid') {
+                        await customerOrder.findByIdAndUpdate(order._id,
+                            { payment_status: 'paid', delivery_status: 'processing' },
+                            { session }
+                        );
+
+                        await authOrderModel.updateMany(
+                            { orderId: order._id },
+                            { payment_status: 'paid', delivery_status: 'processing' },
+                            { session }
+                        );
+
+                        const now = moment();
+                        const month = now.month() + 1;
+                        const year = now.year();
+
+                        await myShopWallet.create([{
+                            amount: order.price,
+                            month,
+                            year
+                        }], { session });
+
+                        const sellerOrders = await authOrderModel.find({ orderId: order._id }).session(session);
+                        const walletUpdates = sellerOrders.map(aO => ({
+                            sellerId: aO.sellerId,
+                            amount: aO.price,
+                            month,
+                            year
+                        }));
+
+                        if (walletUpdates.length > 0) {
+                            await sellerWallet.insertMany(walletUpdates, { session });
+                        }
+
+                        await session.commitTransaction();
                     }
-
-                    // Credit wallets
-                    const now = moment();
-                    const month = now.month() + 1, year = now.year();
-                    await myShopWallet.create({ amount: order.price, month, year });
-                    const authOrders = await authOrderModel.find({ orderId: order._id });
-                    await Promise.all(authOrders.map(aO =>
-                        sellerWallet.create({ sellerId: aO.sellerId, amount: aO.price, month, year })
-                    ));
+                } catch (error) {
+                    await session.abortTransaction();
+                    throw error;
+                } finally {
+                    session.endSession();
                 }
             }
             res.status(200).end();
         } catch (err) {
-            console.error('Webhook processing error:', err);
+            console.error('Webhook error:', err);
             res.status(500).end();
         }
     }
-
-
-    // order_confirm = async (req, res) => {
-    //     const { orderId } = req.params
-    //     try {
-    //         await customerOrder.findByIdAndUpdate(orderId, { payment_status: 'paid', delivery_status: 'pending' })
-    //         await authOrderModel.updateMany({ orderId: new ObjectId(orderId) }, {
-    //             payment_status: 'paid', delivery_status: 'pending'
-    //         })
-    //         const cuOrder = await customerOrder.findById(orderId)
-
-    //         const auOrder = await authOrderModel.find({
-    //             orderId: new ObjectId(orderId)
-    //         })
-
-    //         const time = moment(Date.now()).format('l')
-
-    //         const splitTime = time.split('/')
-
-    //         await myShopWallet.create({
-    //             amount: cuOrder.price,
-    //             manth: splitTime[0],
-    //             year: splitTime[2],
-    //         })
-
-    //         for (let i = 0; i < auOrder.length; i++) {
-    //             await sellerWallet.create({
-    //                 sellerId: auOrder[i].sellerId.toString(),
-    //                 amount: auOrder[i].price,
-    //                 manth: splitTime[0],
-    //                 year: splitTime[2],
-    //             })
-    //         }
-
-    //         responseReturn(res, 200, { message: 'success' })
-
-    //     } catch (error) {
-    //         console.log(error.message)
-    //     }
-    // }
 }
 
-module.exports = new orderController()
+module.exports = new orderController();
