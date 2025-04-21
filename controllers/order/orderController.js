@@ -15,6 +15,14 @@ class orderController {
         this.place_order = this.place_order.bind(this);
     }
 
+    clearPaymentTimeout(orderId) {
+        const timeoutId = this.paymentTimeouts.get(orderId.toString());
+        if (timeoutId) {
+            clearTimeout(timeoutId);
+            this.paymentTimeouts.delete(orderId.toString());
+        }
+    }
+
     // ==================== CORE METHODS ====================
     generateTxRef = () => `ORDER-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
@@ -181,6 +189,61 @@ class orderController {
         }
     }
 
+    // Add this in the CORE METHODS section
+    async handlePaymentSuccess(orderId, session) {
+        const now = moment();
+        const month = now.month() + 1;
+        const year = now.year();
+
+        // Update order status
+        await customerOrder.findByIdAndUpdate(
+            orderId,
+            {
+                payment_status: 'paid',
+                delivery_status: 'processing'
+            },
+            { session }
+        );
+
+        // Update auth orders
+        await authOrderModel.updateMany(
+            { orderId },
+            {
+                payment_status: 'paid',
+                delivery_status: 'processing'
+            },
+            { session }
+        );
+
+        // Update wallets
+        const order = await customerOrder.findById(orderId).session(session);
+
+        // MyShop Wallet
+        await myShopWallet.create([{
+            amount: order.price,
+            month,
+            year,
+            orderId: order._id
+        }], { session });
+
+        // Seller Wallets
+        const sellerOrders = await authOrderModel.find({ orderId }).session(session);
+        const walletUpdates = sellerOrders.map(({ sellerId, price }) => ({
+            sellerId,
+            amount: price,
+            month,
+            year,
+            orderId: order._id
+        }));
+
+        if (walletUpdates.length > 0) {
+            await sellerWallet.insertMany(walletUpdates, { session });
+        }
+
+        // Clear payment timeout
+        this.clearPaymentTimeout(orderId);
+    }
+
     async order_confirm(req, res) {
         const { orderId } = req.params;
         const { transaction_id } = req.body;
@@ -218,7 +281,10 @@ class orderController {
             const paymentData = verification.data.data;
 
             // 3. Get and validate order
-            const order = await customerOrder.findById(orderId).session(session);
+            const order = await customerOrder.findById(orderId)
+                .session(session)
+                .select('+payment_status')
+                .lockForUpdate();
             if (!order) throw new Error('Order not found');
             if (order.payment_status === 'paid') {
                 throw new Error('Payment already processed');
@@ -229,7 +295,7 @@ class orderController {
                 paymentData.status === 'successful',
                 paymentData.currency === 'NGN',
                 paymentData.tx_ref === order.flutterwave_ref,
-                parseInt(paymentData.amount) === parseInt(order.price)
+                Math.abs(paymentData.amount - order.price) < 1 // Allow 1 Naira difference
             ];
 
             if (!validationChecks.every(check => check)) {
@@ -359,63 +425,26 @@ class orderController {
             return res.status(401).send('Unauthorized');
         }
 
+        // Immediately respond to Flutterwave
+        res.status(200).end();
+
         try {
             const event = req.body;
-            if (event.event === 'charge.completed') {
-                const session = await startSession();
-                session.startTransaction();
+            if (event.event !== 'charge.completed') return;
 
-                try {
-                    const txRef = event.data.tx_ref;
-                    const order = await customerOrder.findOne({ flutterwave_ref: txRef }).session(session);
+            const session = await startSession();
+            await session.withTransaction(async () => {
+                const txRef = event.data.tx_ref;
+                const order = await customerOrder.findOne({ flutterwave_ref: txRef })
+                    .session(session)
+                    .select('+payment_status');
 
-                    if (order && order.payment_status !== 'paid') {
-                        await customerOrder.findByIdAndUpdate(order._id,
-                            { payment_status: 'paid', delivery_status: 'processing' },
-                            { session }
-                        );
+                if (!order || order.payment_status === 'paid') return;
 
-                        await authOrderModel.updateMany(
-                            { orderId: order._id },
-                            { payment_status: 'paid', delivery_status: 'processing' },
-                            { session }
-                        );
-
-                        const now = moment();
-                        const month = now.month() + 1;
-                        const year = now.year();
-
-                        await myShopWallet.create([{
-                            amount: order.price,
-                            month,
-                            year
-                        }], { session });
-
-                        const sellerOrders = await authOrderModel.find({ orderId: order._id }).session(session);
-                        const walletUpdates = sellerOrders.map(aO => ({
-                            sellerId: aO.sellerId,
-                            amount: aO.price,
-                            month,
-                            year
-                        }));
-
-                        if (walletUpdates.length > 0) {
-                            await sellerWallet.insertMany(walletUpdates, { session });
-                        }
-
-                        await session.commitTransaction();
-                    }
-                } catch (error) {
-                    await session.abortTransaction();
-                    throw error;
-                } finally {
-                    session.endSession();
-                }
-            }
-            res.status(200).end();
-        } catch (err) {
-            console.error('Webhook error:', err);
-            res.status(500).end();
+                await this.handlePaymentSuccess(order._id, session);
+            });
+        } catch (error) {
+            console.error('Webhook processing error:', error);
         }
     }
 }
