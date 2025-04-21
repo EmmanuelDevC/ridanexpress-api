@@ -250,79 +250,99 @@ class orderController {
         const session = await startSession();
 
         try {
-            // Validate inputs
-            if (!transaction_id || transaction_id.length < 10) {
-                throw new Error('Invalid transaction ID');
-            }
-
-            if (!process.env.FLUTTERWAVE_SECRET_KEY) {
-                throw new Error('Payment system configuration error');
-            }
-
             session.startTransaction();
 
-            // 1. Verify payment with Flutterwave
+            // 1. Get the order first with locking
+            const order = await customerOrder.findById(orderId)
+                .session(session)
+                .select('+payment_status +flutterwave_ref')
+                .lean();
+
+            if (!order) throw new Error('Order not found');
+            if (order.payment_status === 'paid') {
+                return responseReturn(res, 200, { message: 'Payment already confirmed' });
+            }
+
+            // 2. Verify payment with Flutterwave
             const verification = await axios.get(
                 `https://api.flutterwave.com/v3/transactions/${transaction_id}/verify`,
                 {
                     headers: {
-                        Authorization: `Bearer ${process.env.FLUTTERWAVE_SECRET_KEY}`
+                        Authorization: `Bearer ${process.env.FLUTTERWAVE_SECRET_KEY}`,
+                        'Content-Type': 'application/json'
                     },
-                    timeout: 20000
+                    timeout: 15000
                 }
             );
 
-            // 2. Validate verification response
-            if (verification.data.status !== 'success') {
-                console.error('Flutterwave verification failed:', verification.data);
+            // 3. Validate verification response structure
+            if (!verification.data || verification.data.status !== 'success') {
+                console.error('Invalid verification structure:', verification.data);
                 throw new Error('Payment verification failed');
             }
 
             const paymentData = verification.data.data;
 
-            // 3. Get and validate order
-            const order = await customerOrder.findById(orderId)
-                .session(session)
-                .select('+payment_status')
-                .lockForUpdate();
-            if (!order) throw new Error('Order not found');
-            if (order.payment_status === 'paid') {
-                throw new Error('Payment already processed');
+            // 4. Detailed validation checks
+            const validationErrors = [];
+
+            if (paymentData.status !== 'successful') {
+                validationErrors.push(`Status: ${paymentData.status}`);
             }
 
-            // 4. Validate transaction details
-            const validationChecks = [
-                paymentData.status === 'successful',
-                paymentData.currency === 'NGN',
-                paymentData.tx_ref === order.flutterwave_ref,
-                Math.abs(paymentData.amount - order.price) < 1 // Allow 1 Naira difference
-            ];
+            if (paymentData.currency !== 'NGN') {
+                validationErrors.push(`Currency: ${paymentData.currency}`);
+            }
 
-            if (!validationChecks.every(check => check)) {
-                console.error('Validation failed:', {
-                    status: paymentData.status,
-                    currency: paymentData.currency,
-                    tx_ref: paymentData.tx_ref,
-                    amount: paymentData.amount,
-                    orderPrice: order.price
-                });
-                throw new Error('Transaction validation failed');
+            if (paymentData.tx_ref !== order.flutterwave_ref) {
+                validationErrors.push(`Reference: ${paymentData.tx_ref} vs ${order.flutterwave_ref}`);
+            }
+
+            if (Math.abs(paymentData.amount - order.price) > 1) { // Allow 1 Naira difference
+                validationErrors.push(`Amount: ${paymentData.amount} vs ${order.price}`);
+            }
+
+            if (validationErrors.length > 0) {
+                console.error('Validation failures:', validationErrors);
+                throw new Error(`Payment validation failed: ${validationErrors.join(', ')}`);
             }
 
             // 5. Process payment
-            await this.handlePaymentSuccess(orderId, session);
-            await session.commitTransaction();
+            await customerOrder.updateOne(
+                { _id: orderId },
+                {
+                    $set: {
+                        payment_status: 'paid',
+                        delivery_status: 'processing',
+                        payment_meta: paymentData
+                    }
+                },
+                { session }
+            );
 
+            await authOrderModel.updateMany(
+                { orderId },
+                {
+                    $set: {
+                        payment_status: 'paid',
+                        delivery_status: 'processing'
+                    }
+                },
+                { session }
+            );
+
+            await session.commitTransaction();
             responseReturn(res, 200, { message: 'Payment confirmed successfully' });
 
         } catch (error) {
             await session.abortTransaction();
-            console.error('Payment confirmation error:', {
+            console.error('Payment Error:', {
                 orderId,
                 error: error.message,
-                stack: error.stack
+                stack: error.stack,
+                transaction_id
             });
-            responseReturn(res, 500, { message: error.message });
+            responseReturn(res, 400, { message: error.message });
         } finally {
             session.endSession();
         }
