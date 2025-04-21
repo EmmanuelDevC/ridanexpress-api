@@ -1,51 +1,34 @@
-const { Schema, model } = require('mongoose');
+const { Schema, model } = require('mongoose')
 
-const customerOrderSchema = new Schema({
-    customerId: {
-        type: Schema.Types.ObjectId,
-        required: true,
+const customerOrder = new Schema({
+    customerId : {
+        type : Schema.ObjectId,
+        required : true
     },
-    products: {
-        type: Array,
-        required: true
+    products : {
+        type : Array,
+        required : true
     },
-    price: {
-        type: Number,
-        required: true,
+    price : {
+        type : Number,
+        required : true
     },
-    payment_status: {
-        type: String,
-        required: true,
-        enum: ['unpaid', 'paid', 'failed', 'refunded'],
-        default: 'unpaid'
+    payment_status : {
+        type : String,
+        required : true
     },
-    shippingInfo: {
-        type: Object,
-        required: true
+    shippingInfo : {
+        type : Object,
+        required : true
     },
-    delivery_status: {
-        type: String,
-        required: true,
-        enum: ['pending', 'processing', 'shipped', 'delivered', 'cancelled'],
-        default: 'pending'
+    delivery_status : {
+        type : String,
+        required : true
     },
-    payment_date: {
-        type: Date
+    date : {
+        type : String,
+        required : true
     },
-    flutterwave_ref: {
-        type: String,
-        unique: true,
-        index: true
-    },
-    transaction_id: {
-        type: String,
-        index: true
-    }
-}, {
-    timestamps: true,
-    toJSON: { virtuals: true },
-    toObject: { virtuals: true }
-});
+},{timestamps : true})
 
-// Remove the trailing "4" from model name
-module.exports = model('CustomerOrder', customerOrderSchema);
+module.exports = model('customerOrders',customerOrder)
