@@ -1,18 +1,36 @@
+const mongoose = require('mongoose');
+const { Types: { ObjectId } } = mongoose;
 const authOrderModel = require('../../models/authOrder');
 const customerOrder = require('../../models/customerOrder');
 const cardModel = require('../../models/cardModel');
 const myShopWallet = require('../../models/myShopWallet');
 const sellerWallet = require('../../models/sellerWallet');
 const axios = require('axios');
-const { mongo: { ObjectId, startSession } } = require('mongoose');
 const { responseReturn } = require('../../utiles/response');
 const moment = require('moment');
 
 class orderController {
+
     constructor() {
         this.paymentTimeouts = new Map();
-        this.paymentTimeout = parseInt(process.env.PAYMENT_TIMEOUT_MS) || 900000; // 15 minutes
+        this.paymentTimeout = parseInt(process.env.PAYMENT_TIMEOUT_MS) || 900000;
         this.currency = 'NGN';
+
+        // Bind all controller methods to 'this'
+        this.place_order = this.place_order.bind(this);
+        this.generateTxRef = this.generateTxRef.bind(this);
+        this.get_customer_databorad_data = this.get_customer_databorad_data.bind(this);
+        this.get_orders = this.get_orders.bind(this);
+        this.get_order = this.get_order.bind(this);
+        this.create_payment = this.create_payment.bind(this);
+        this.order_confirm = this.order_confirm.bind(this);
+        this.get_admin_orders = this.get_admin_orders.bind(this);
+        this.get_admin_order = this.get_admin_order.bind(this);
+        this.admin_order_status_update = this.admin_order_status_update.bind(this);
+        this.get_seller_orders = this.get_seller_orders.bind(this);
+        this.get_seller_order = this.get_seller_order.bind(this);
+        this.seller_order_status_update = this.seller_order_status_update.bind(this);
+        this.handle_flutterwave_webhook = this.handle_flutterwave_webhook.bind(this);
     }
 
     // ==================== CORE METHODS ====================
@@ -97,19 +115,36 @@ class orderController {
     // ==================== CUSTOMER ROUTES ====================
     async place_order(req, res) {
         const session = await mongoose.startSession();
+        let order; // Declare order here
         try {
-            const { price, products, shipping_fee, shippingInfo, userId } = req.body;
+            // Destructure with proper validation
+            const {
+                price,
+                products,
+                shipping_fee,
+                shippingInfo,
+                userId
+            } = req.body;
+
+            if (!products || !Array.isArray(products)) {
+                throw new Error('Invalid products data');
+            }
+
+            // Debugging log (properly scoped)
+            console.log('Processing products:', JSON.stringify(products, null, 2));
+
             const tx_ref = this.generateTxRef();
+            if (!tx_ref) throw new Error('Failed to generate payment reference');
 
             await session.withTransaction(async () => {
                 // Create main order
-                const [order] = await customerOrder.create([{
+                const createdOrder = await customerOrder.create([{
                     customerId: userId,
                     shippingInfo,
                     products: products.flatMap(seller =>
                         seller.products.map(item => ({
-                            productId: item.productId,
-                            price: item.price,
+                            productId: item.productInfo._id, // Match your data structure
+                            price: item.productInfo.price,
                             quantity: item.quantity
                         }))
                     ),
@@ -121,20 +156,30 @@ class orderController {
                     createdAt: new Date()
                 }], { session });
 
-                // Create seller orders
-                const authOrders = products.map(seller => ({
-                    orderId: order._id,
-                    sellerId: seller.sellerId,
-                    products: seller.products.map(item => ({
-                        productId: item.productId,
-                        price: item.price,
-                        quantity: item.quantity
-                    })),
-                    price: seller.totalPrice,
-                    payment_status: 'unpaid',
-                    delivery_status: 'pending',
-                    createdAt: new Date()
-                }));
+                order = createdOrder[0]; // Assign the created order to the variable
+
+                // Create seller orders (corrected mapping)
+                const authOrders = products.map(seller => {
+                    // Validate seller data
+                    if (!seller?.sellerId || !seller?.price) {
+                        console.error('Invalid seller:', seller);
+                        throw new Error('Invalid seller data');
+                    }
+
+                    return {
+                        orderId: order._id,
+                        sellerId: seller.sellerId,
+                        products: seller.products.map(item => ({
+                            productId: item.productInfo._id,
+                            price: item.productInfo.price,
+                            quantity: item.quantity
+                        })),
+                        price: seller.price, // Changed to match your data
+                        payment_status: 'unpaid',
+                        delivery_status: 'pending',
+                        createdAt: new Date()
+                    };
+                });
 
                 await authOrderModel.insertMany(authOrders, { session });
 
@@ -178,12 +223,45 @@ class orderController {
             });
 
         } catch (error) {
-            console.error('Order placement error:', error);
-            responseReturn(res, 500, { message: 'Order processing failed' });
+            console.error('Order error:', error.message);
+            responseReturn(res, 500, { message: error.message });
         } finally {
             session.endSession();
         }
     }
+
+
+    // // Clear cart items
+    // const cartIds = products.flatMap(seller =>
+    //     seller.products.map(item => item._id).filter(Boolean)
+    // );
+    // if (cartIds.length > 0) {
+    //     await cardModel.deleteMany({ _id: { $in: cartIds } }).session(session);
+    // }
+
+    // // Set payment timeout
+    // this.paymentTimeouts.set(
+    //     order._id.toString(),
+    //     setTimeout(async () => {
+    //         const session = await mongoose.startSession();
+    //         try {
+    //             await session.withTransaction(async () => {
+    //                 await customerOrder.findByIdAndUpdate(
+    //                     order._id,
+    //                     { $set: { payment_status: 'failed', delivery_status: 'cancelled' } },
+    //                     { session }
+    //                 );
+    //                 await authOrderModel.updateMany(
+    //                     { orderId: order._id },
+    //                     { $set: { delivery_status: 'cancelled' } },
+    //                     { session }
+    //                 );
+    //             });
+    //         } finally {
+    //             session.endSession();
+    //         }
+    //     }, this.paymentTimeout)
+    // );
 
     async get_customer_databorad_data(req, res) {
         const { userId } = req.params;
@@ -252,15 +330,14 @@ class orderController {
                     tx_ref: order.flutterwave_ref,
                     amount: order.price,
                     currency: this.currency,
-                    redirect_url: process.env.PAYMENT_REDIRECT_URL,
+                    redirect_url: "https://ridanexpress-client.vercel.app/payment/verify",
                     customer: {
-                        email: req.user.email,
-                        name: req.user.name,
-                        phonenumber: req.user.phone
+                        email: "email@gmail.com",
+                        name: "Test User",
                     },
                     customizations: {
-                        title: process.env.APP_NAME,
-                        logo: process.env.LOGO_URL
+                        title: 'Ridan express'
+                        // logo: process.env.LOGO_URL
                     }
                 },
                 {
@@ -436,7 +513,7 @@ class orderController {
             responseReturn(res, 500, { message: 'internal server error' })
         }
     }
-    
+
     async get_seller_order(req, res) {
         const { orderId } = req.params;
         try {

@@ -15,24 +15,24 @@ const authorSchema = new Schema({
     },
     price : {
         type : Number,
-        required : true
+        required : true,
     },
     payment_status : {
         type : String,
         required : true
     },
-    shippingInfo : {
-        type : String,
-        required : true
-    },
+    // shippingInfo : {
+    //     type : String,
+    //     required : true
+    // },
     delivery_status : {
         type : String,
         required : true
     },
-    date : {
-        type : String,
-        required : true
-    },
+    createdAt: {
+        type: Date,
+        default: Date.now
+      }
 },{timestamps : true})
 
 module.exports = model('authorOrders',authorSchema)

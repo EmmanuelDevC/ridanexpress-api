@@ -1,34 +1,39 @@
 const { Schema, model } = require('mongoose')
 
 const customerOrder = new Schema({
-    customerId : {
-        type : Schema.ObjectId,
-        required : true
+    customerId: {
+        type: Schema.ObjectId,
+        required: true
     },
-    products : {
-        type : Array,
-        required : true
+    products: {
+        type: Array,
+        required: true
     },
-    price : {
-        type : Number,
-        required : true
+    price: {
+        type: Number,
+        required: true
     },
-    payment_status : {
-        type : String,
-        required : true
+    payment_status: {
+        type: String,
+        required: true
     },
-    shippingInfo : {
-        type : Object,
-        required : true
+    shippingInfo: {
+        type: Object,
+        required: true
     },
-    delivery_status : {
-        type : String,
-        required : true
+    flutterwave_ref: {
+        type: String,
+        unique: true,
+        sparse: true // Allows multiple nulls
     },
-    date : {
-        type : String,
-        required : true
+    delivery_status: {
+        type: String,
+        required: true
     },
-},{timestamps : true})
+    createdAt: {
+        type: Date,
+        default: Date.now
+    }
+}, { timestamps: true })
 
-module.exports = model('customerOrders',customerOrder)
+module.exports = model('customerOrders', customerOrder)
