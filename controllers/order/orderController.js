@@ -39,6 +39,7 @@ class orderController {
     }
     async handlePaymentSuccess(orderId, session) {
         const now = moment();
+
         try {
             const order = await customerOrder.findById(orderId)
                 .session(session)
@@ -46,6 +47,7 @@ class orderController {
                 .lean();
 
             if (!order || order.payment_status === 'paid') return;
+            this.clearPaymentTimeout(orderId);
 
             // Update order status to match Stripe flow
             await customerOrder.findByIdAndUpdate(
@@ -97,7 +99,6 @@ class orderController {
                 )
             );
 
-            this.clearPaymentTimeout(orderId);
         } catch (error) {
             console.error('Payment success handling failed:', error);
             throw error;
@@ -148,7 +149,7 @@ class orderController {
                             quantity: item.quantity
                         }))
                     ),
-                    price: parseFloat(price + shipping_fee).toFixed(2),
+                    price: price + shipping_fee, // Ensures 2 decimal precision as number
                     currency: this.currency,
                     delivery_status: 'pending',
                     payment_status: 'unpaid',
@@ -328,10 +329,12 @@ class orderController {
                 'https://api.flutterwave.com/v3/payments',
                 {
                     tx_ref: order.flutterwave_ref,
-                    amount: order.price,
+                    amount: order.price * 100, // Convert Naira to kobo
                     currency: this.currency,
                     redirect_url: "https://ridanexpress-client.vercel.app/payment/verify",
                     customer: {
+                        // email: req.user.email,
+                        // name: req.user.name,
                         email: "email@gmail.com",
                         name: "Test User",
                     },
@@ -366,7 +369,7 @@ class orderController {
 
     async order_confirm(req, res) {
         const { orderId } = req.params;
-        const { transaction_id } = req.body;
+        let { transaction_id } = req.body;
         const session = await mongoose.startSession();
 
         try {
