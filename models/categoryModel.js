@@ -9,14 +9,20 @@ const categorySchema = new Schema({
         type: String,
         required: true
     },
+    subcategories: {
+        type: [String],
+        required: true,
+        validate: [arrayLimit, '{PATH} exceeds the limit of 10'],
+        default: []
+    },
     slug: {
         type: String,
         required: true
     }
-}, { timestamps: true })
+}, { timestamps: true });
 
-categorySchema.index({
-    name: 'text'
-})
+function arrayLimit(val) {
+    return val.length <= 10;
+}
 
 module.exports = model('categorys', categorySchema)

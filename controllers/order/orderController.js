@@ -127,12 +127,30 @@ class orderController {
                 userId
             } = req.body;
 
+            // ======== DEBUG: Log raw incoming products data ========
+            console.log('\n===== [DEBUG] Raw Request Body Products =====');
+            console.log(JSON.stringify(products, null, 2)); // Log entire structure
+            console.log('===========================================\n');
+
             if (!products || !Array.isArray(products)) {
                 throw new Error('Invalid products data');
             }
 
-            // Debugging log (properly scoped)
-            console.log('Processing products:', JSON.stringify(products, null, 2));
+            products.forEach((seller, sellerIndex) => {
+                console.log(`\n===== [DEBUG] Seller ${sellerIndex + 1} Products =====`);
+                seller.products.forEach((item, itemIndex) => {
+                    console.log(`Item ${itemIndex + 1}:`);
+                    console.log('Item object:', JSON.stringify(item, null, 2));
+                    // Explicitly check for critical fields
+                    console.log('Has productInfo?', !!item.productInfo);
+                    if (item.productInfo) {
+                        console.log('productInfo.name:', item.productInfo.name);
+                        console.log('productInfo.brand:', item.productInfo.brand);
+                        console.log('productInfo.images:', item.productInfo.images);
+                    }
+                });
+                console.log('===========================================\n');
+            });
 
             const tx_ref = this.generateTxRef();
             if (!tx_ref) throw new Error('Failed to generate payment reference');
@@ -145,7 +163,11 @@ class orderController {
                     products: products.flatMap(seller =>
                         seller.products.map(item => ({
                             productId: item.productInfo._id, // Match your data structure
+                            name: item.productInfo.name,        // Added
+                            brand: item.productInfo.brand,      // Added
+                            images: item.productInfo.images,    // Added
                             price: item.productInfo.price,
+                            discount: item.productInfo.discount,
                             quantity: item.quantity
                         }))
                     ),
@@ -170,9 +192,14 @@ class orderController {
                     return {
                         orderId: order._id,
                         sellerId: seller.sellerId,
+                        shippingInfo: order.shippingInfo,
                         products: seller.products.map(item => ({
                             productId: item.productInfo._id,
+                            name: item.productInfo.name,        // Added
+                            brand: item.productInfo.brand,      // Added
+                            images: item.productInfo.images,    // Added                      
                             price: item.productInfo.price,
+                            discount: item.productInfo.discount,
                             quantity: item.quantity
                         })),
                         price: seller.price, // Changed to match your data
@@ -225,6 +252,7 @@ class orderController {
 
         } catch (error) {
             console.error('Order error:', error.message);
+            console.log('[DEBUG] Shipping Info from Request:', shippingInfo);
             responseReturn(res, 500, { message: error.message });
         } finally {
             session.endSession();
@@ -300,11 +328,43 @@ class orderController {
         }
     }
 
+    // async get_order(req, res) {
+    //     const { orderId } = req.params;
+    //     try {
+    //         const order = await customerOrder.findById(orderId);
+    //         responseReturn(res, 200, { order });
+    //     } catch (error) {
+    //         console.log(error.message);
+    //         responseReturn(res, 500, { message: 'Server error' });
+    //     }
+    // }
+
     async get_order(req, res) {
         const { orderId } = req.params;
         try {
-            const order = await customerOrder.findById(orderId);
-            responseReturn(res, 200, { order });
+            const order = await customerOrder.findById(orderId)
+                .populate({
+                    path: 'products.productId',
+                    select: 'name brand images price' // Add other needed fields
+                });
+
+            if (!order) return responseReturn(res, 404, { message: 'Order not found' });
+
+            // Map populated data to ensure consistency
+            const formattedOrder = {
+                ...order._doc,
+                products: order.products.map(p => ({
+                    ...p,
+                    name: p.name || p.productId?.name,
+                    brand: p.brand || p.productId?.brand,
+                    images: p.images || p.productId?.images,
+                    quantity: p.quantity || p.productId?.quantity,
+                    price: p.price || p.productId?.price,
+                    discount: p.discount || p.productId?.discount, // Uncomment if needed    
+                }))
+            };
+
+            responseReturn(res, 200, { order: formattedOrder });
         } catch (error) {
             console.log(error.message);
             responseReturn(res, 500, { message: 'Server error' });
@@ -490,7 +550,6 @@ class orderController {
 
     // ==================== SELLER ROUTES ====================
     get_seller_orders = async (req, res) => {
-
         const { sellerId } = req.params
         let { page, parPage, searchValue } = req.query
         page = parseInt(page)

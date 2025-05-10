@@ -1,38 +1,38 @@
-const { Schema, model } = require('mongoose')
+const { Schema, model } = require('mongoose');
 
-const authorSchema = new Schema({
-    orderId : {
-        type : Schema.ObjectId,
-        required : true
-    },
-    sellerId : {
-        type : Schema.ObjectId,
-        required : true
-    },
-    products : {
-        type : Array,
-        required : true
-    },
-    price : {
-        type : Number,
-        required : true,
-    },
-    payment_status : {
-        type : String,
-        required : true
-    },
-    // shippingInfo : {
-    //     type : String,
-    //     required : true
-    // },
-    delivery_status : {
-        type : String,
-        required : true
-    },
-    createdAt: {
-        type: Date,
-        default: Date.now
-      }
-},{timestamps : true})
+const authOrderSchema = new Schema({
+  orderId: {
+    type: Schema.ObjectId,
+    required: true
+  },
+  sellerId: {
+    type: Schema.ObjectId,
+    required: true
+  },
+  products: [{
+    productId: { type: Schema.ObjectId, required: true },
+    name: { type: String, required: true },
+    brand: { type: String, required: true},
+    images: { type: [String], required: true }, // Array of strings for image URLs
+    price: { type: Number, required: true },
+    quantity: { type: Number, required: true }
+  }],
+  price: {
+    type: Number,
+    required: true
+  },
+  payment_status: {
+    type: String,
+    required: true
+  },
+  shippingInfo: { 
+    type: Object,
+    required: true
+  },
+  delivery_status: {
+    type: String,
+    required: true
+  }
+}, { timestamps: true }); // Removed redundant `date` field
 
-module.exports = model('authorOrders',authorSchema)
+module.exports = model('authorOrders', authOrderSchema);
