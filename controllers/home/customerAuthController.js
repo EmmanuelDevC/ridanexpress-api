@@ -76,59 +76,41 @@ class customerAuthController {
 
     customer_update = async (req, res) => {
         const { id } = req.params;
-        const { name, email, password } = req.body;
+        const { name, email, newPassword, currentPassword } = req.body;
 
-        // Enhanced ID validation
         if (!Types.ObjectId.isValid(id)) {
-            return responseReturn(res, 400, {
-                error: 'Invalid user ID format',
-                details: `Received invalid ID: ${id}`
-            });
+            return responseReturn(res, 400, { error: 'Invalid user ID' });
         }
 
         try {
-            const updates = {};
-            // Add field-specific validation
-            if (name && typeof name === 'string') {
-                updates.name = name.trim();
-            }
-
-            if (email && typeof email === 'string') {
-                updates.email = email.toLowerCase().trim();
-            }
-
-            if (password && typeof password === 'string') {
-                if (password.length < 8) {
-                    return responseReturn(res, 400, {
-                        error: 'Password must be at least 8 characters'
-                    });
-                }
-                updates.password = await bcrypt.hash(password, 10);
-            }
-
-            // Add debug logging
-            console.log('Attempting update with ID:', id);
-            console.log('Update payload:', updates);
-
-            const updatedUser = await customerModel.findByIdAndUpdate(
-                id,
-                { $set: updates },
-                {
-                    new: true,
-                    runValidators: true,
-                    // Add projection to ensure consistent response
-                    select: '_id name email verified'
-                }
-            ).lean();
-
-            if (!updatedUser) {
-                console.error('Update failed - user not found with ID:', id);
+            const customer = await customerModel.findById(id).select('+password');
+            if (!customer) {
                 return responseReturn(res, 404, { error: 'User not found' });
             }
 
-            // Convert MongoDB _id to string for consistency
-            updatedUser.id = updatedUser._id.toString();
-            delete updatedUser._id;
+            // Verify current password first
+            const isMatch = await bcrypt.compare(currentPassword, customer.password);
+            if (!isMatch) {
+                return responseReturn(res, 401, {
+                    error: 'Current password is incorrect'
+                });
+            }
+
+            // Proceed with updates if password matches
+            const updates = {};
+            if (name && name !== customer.name) updates.name = name.trim();
+            if (email && email !== customer.email) updates.email = email.toLowerCase().trim();
+            if (newPassword) updates.password = await bcrypt.hash(newPassword, 10);
+
+            if (Object.keys(updates).length === 0) {
+                return responseReturn(res, 400, { error: 'No changes detected' });
+            }
+
+            const updatedUser = await customerModel.findByIdAndUpdate(
+                id,
+                updates,
+                { new: true, runValidators: true }
+            ).select('-password');
 
             responseReturn(res, 200, {
                 message: 'Profile updated successfully',
@@ -137,52 +119,11 @@ class customerAuthController {
 
         } catch (error) {
             console.error('Update Error:', error);
-            const errorMessage = error.name === 'ValidationError'
-                ? error.message
-                : 'Update failed due to server error';
-
             responseReturn(res, 500, {
-                error: errorMessage,
-                ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
+                error: error.message || 'Update failed'
             });
         }
     }
-
-    // customer_login = async (req, res) => {
-    //     const { email, password } = req.body;
-    //     try {
-    //         const customer = await customerModel.findOne({ email }).select('+password');
-    //         if (customer) {
-    //             // Check verification status
-    //             if (!customer.verified) {
-    //                 return responseReturn(res, 403, {
-    //                     error: 'Email not verified. Check your inbox or resend verification.'
-    //                 });
-    //             }
-
-    //             const match = await bcrypt.compare(password, customer.password);
-    //             if (match) {
-    //                 const token = await createToken({
-    //                     id: customer.id,
-    //                     name: customer.name,
-    //                     email: customer.email,
-    //                     method: customer.method
-    //                 });
-    //                 res.cookie('customerToken', token, {
-    //                     expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-    //                 });
-    //                 responseReturn(res, 200, { message: 'Login success', token });
-    //             } else {
-    //                 responseReturn(res, 401, { error: "Incorrect password" });
-    //             }
-    //         } else {
-    //             responseReturn(res, 404, { error: 'Email not found' });
-    //         }
-    //     } catch (error) {
-    //         console.log(error.message);
-    //         responseReturn(res, 500, { error: 'Server error' });
-    //     }
-    // }
 
     customer_login = async (req, res) => {
         const { email, password } = req.body;
