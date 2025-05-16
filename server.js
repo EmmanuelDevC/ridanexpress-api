@@ -1,12 +1,12 @@
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 const express = require('express')
 const { dbConnect } = require('./utiles/db')
-const path = require('path')
 const app = express()
 const cors = require('cors')
 const http = require('http')
 const bodyParser = require('body-parser')
 const cookieParser = require('cookie-parser')
-require('dotenv').config()
 
 const socket = require('socket.io')
 const mode = process.env.mode
@@ -129,7 +129,7 @@ io.on('connection', (socket) => {
         if (seller) {
             // Notify the customer that their message was seen
             socket.to(seller.socketId).emit('message_seen', messageId)
-            
+
             // Optionally broadcast to all connected devices of the seller
             allSeller.filter(s => s.sellerId === senderId).forEach(s => {
                 io.to(s.socketId).emit('message_seen', messageId)

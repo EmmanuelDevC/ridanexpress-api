@@ -14,3 +14,6 @@ router.post('/resend-verification', customerAuthController.resend_verification);
 // Protected Profile Routes
 router.patch('/customer/update/:id', authMiddleware, customerAuthController.customer_update)
 module.exports = router;
+
+//Password Reset Routes
+router.post('/reset-password', customerAuthController.reset_password);

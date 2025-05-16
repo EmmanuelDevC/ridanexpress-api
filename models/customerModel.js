@@ -9,7 +9,9 @@ const customerSchema = new Schema({
   verified: { type: Boolean, default: false },
   verificationToken: String,
   verificationExpires: Date,
-  // New security fields
+  resetPasswordToken: String,
+  resetPasswordExpire: Date,
+  
   active: {
     type: Boolean,
     default: true

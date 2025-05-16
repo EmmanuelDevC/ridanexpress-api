@@ -6,6 +6,7 @@ const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const { Types } = require('mongoose');
 const sendVerificationEmail = require('../../utiles/emailSender'); // Add email sender
+const sendPasswordChangeEmail = require('../../utiles/passwordChangeEmail'); // Add email sender
 
 class customerAuthController {
     customer_register = async (req, res) => {
@@ -88,34 +89,77 @@ class customerAuthController {
                 return responseReturn(res, 404, { error: 'User not found' });
             }
 
-            // Verify current password first
+            // Verify current password
             const isMatch = await bcrypt.compare(currentPassword, customer.password);
             if (!isMatch) {
-                return responseReturn(res, 401, {
-                    error: 'Current password is incorrect'
-                });
+                return responseReturn(res, 401, { error: 'Current password is incorrect' });
             }
 
-            // Proceed with updates if password matches
             const updates = {};
-            if (name && name !== customer.name) updates.name = name.trim();
-            if (email && email !== customer.email) updates.email = email.toLowerCase().trim();
-            if (newPassword) updates.password = await bcrypt.hash(newPassword, 10);
+            let securityUpdate = false;
+
+            // Name update
+            if (name && name !== customer.name) {
+                updates.name = name.trim();
+            }
+
+            // Email update
+            if (email && email !== customer.email) {
+                updates.email = email.toLowerCase().trim();
+            }
+
+            // Password update
+            if (newPassword) {
+                const isSamePassword = await bcrypt.compare(newPassword, customer.password);
+                if (isSamePassword) {
+                    return responseReturn(res, 400, { error: 'New password must be different' });
+                }
+
+                updates.password = await bcrypt.hash(newPassword, 10);
+                updates.tokenVersion = customer.tokenVersion + 1;
+                securityUpdate = true;
+
+                // Generate password reset token
+                const resetToken = crypto.randomBytes(20).toString('hex');
+                updates.resetPasswordToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+                updates.resetPasswordExpire = Date.now() + 900000; // 15 minutes
+            }
 
             if (Object.keys(updates).length === 0) {
                 return responseReturn(res, 400, { error: 'No changes detected' });
             }
 
+            // Perform atomic update
             const updatedUser = await customerModel.findByIdAndUpdate(
                 id,
                 updates,
                 { new: true, runValidators: true }
             ).select('-password');
 
-            responseReturn(res, 200, {
-                message: 'Profile updated successfully',
+            // Send security email if password changed
+            if (securityUpdate) {
+                const resetToken = crypto.randomBytes(20).toString('hex');
+                await sendPasswordChangeEmail({
+                    email: customer.email,
+                    name: customer.name,
+                    resetLink: `${process.env.CLIENT_URL}/reset-password?token=${resetToken}`
+                });
+            }
+
+            // Prepare response
+            const responsePayload = {
+                message: securityUpdate
+                    ? 'Password updated. All sessions terminated.'
+                    : 'Profile updated successfully',
                 user: updatedUser
-            });
+            };
+
+            if (securityUpdate) {
+                responsePayload.requiresReauth = true;
+                res.clearCookie('customerToken');
+            }
+
+            responseReturn(res, 200, responsePayload);
 
         } catch (error) {
             console.error('Update Error:', error);
@@ -124,6 +168,7 @@ class customerAuthController {
             });
         }
     }
+
 
     customer_login = async (req, res) => {
         const { email, password } = req.body;
@@ -150,6 +195,7 @@ class customerAuthController {
             // Use proper ObjectId conversion
             const token = await createToken({
                 id: customer._id.toString(), // Critical fix here
+                tokenVersion: customer.tokenVersion,
                 name: customer.name,
                 email: customer.email,
                 method: customer.method
@@ -235,6 +281,68 @@ class customerAuthController {
         } catch (error) {
             console.log(error.message);
             responseReturn(res, 500, { error: 'Server error' });
+        }
+    }
+
+    reset_password = async (req, res) => {
+        const { token, newPassword } = req.body;
+
+        if (!token || !newPassword) {
+            return responseReturn(res, 400, {
+                error: 'Token and new password are required'
+            });
+        }
+
+        try {
+            const hashedToken = crypto.createHash('sha256')
+                .update(token)
+                .digest('hex');
+
+            const customer = await customerModel.findOne({
+                resetPasswordToken: hashedToken,
+                resetPasswordExpire: { $gt: Date.now() }
+            });
+
+            if (!customer) {
+                return responseReturn(res, 400, { error: 'Invalid or expired token' });
+            }
+
+            // Validate password strength
+            const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
+            if (!passwordRegex.test(newPassword)) {
+                return responseReturn(res, 400, {
+                    error: 'Password must contain 8+ chars with uppercase, number, and special character'
+                });
+            }
+
+            // Check password history (add your implementation)
+            const isReused = await bcrypt.compare(newPassword, customer.password);
+            if (isReused) {
+                return responseReturn(res, 400, {
+                    error: 'Cannot reuse previous passwords'
+                });
+            }
+
+            // Update password and security fields
+            const updates = {
+                password: await bcrypt.hash(newPassword, 10),
+                tokenVersion: customer.tokenVersion + 1,
+                resetPasswordToken: undefined,
+                resetPasswordExpire: undefined
+            };
+
+            await customerModel.findByIdAndUpdate(customer._id, updates);
+
+            responseReturn(res, 200, {
+                message: 'Password reset successful. Please login again.',
+                requiresReauth: true
+            });
+
+        } catch (error) {
+            console.error('Password Reset Error:', error);
+            responseReturn(res, 500, {
+                error: 'Password reset failed. Please try again later.'
+            });
         }
     }
 
