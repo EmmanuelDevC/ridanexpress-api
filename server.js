@@ -13,14 +13,14 @@ const mode = process.env.mode
 const server = http.createServer(app)
 
 app.use(cors({
-    origin: ['http://localhost:3000', 'http://localhost:3001', 'https://ridanexpress-client.vercel.app', 'https://ridan-express-dashboard.vercel.app'],
+    origin: ['http://localhost:3000', 'http://localhost:3001', 'https://ridan-express-client.vercel.app', 'https://ridan-express-dashboard.vercel.app'],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH']
 }));
 
 const io = socket(server, {
     cors: {
-        origin: ['http://localhost:3000', 'http://localhost:3001', 'https://ridanexpress-client.vercel.app', 'https://ridan-express-dashboard.vercel.app'],
+        origin: ['http://localhost:3000', 'http://localhost:3001', 'https://ridan-express-client.vercel.app', 'https://ridan-express-dashboard.vercel.app'],
         credentials: true,
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH']
     }
