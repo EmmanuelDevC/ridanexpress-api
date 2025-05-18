@@ -11,9 +11,11 @@ router.get('/customer-logout', authMiddleware, customerAuthController.customer_l
 router.get('/verify-email', customerAuthController.verify_email);
 router.post('/resend-verification', customerAuthController.resend_verification);
 
+// Password Routes
+router.post('/forgot-password', customerAuthController.request_password_reset);
+router.post('/reset-password', customerAuthController.reset_password)
+
 // Protected Profile Routes
 router.patch('/customer/update/:id', authMiddleware, customerAuthController.customer_update)
-module.exports = router;
 
-//Password Reset Routes
-router.post('/reset-password', customerAuthController.reset_password);
+module.exports = router;
