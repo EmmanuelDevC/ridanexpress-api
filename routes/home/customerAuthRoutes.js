@@ -15,7 +15,7 @@ router.post('/resend-verification', customerAuthController.resend_verification);
 router.post('/forgot-password', customerAuthController.request_password_reset);
 router.post('/reset-password', customerAuthController.reset_password)
 
-router.post('/google-auth', googleAuthController.googleLoginOrRegister);
+router.post('/google-auth', googleAuthController.googleLoginOrRegister.bind(googleAuthController));
 
 // Protected Profile Routes
 router.patch('/customer/update/:id', authMiddleware, customerAuthController.customer_update)

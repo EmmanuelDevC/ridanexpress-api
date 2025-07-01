@@ -28,9 +28,9 @@ class googleAuthController {
         try {
             // Verify Google token
             const googleUser = await this.verifyGoogleToken(token);
-            
+
             // Check if user exists
-            let customer = await customerModel.findOne({ 
+            let customer = await customerModel.findOne({
                 $or: [
                     { googleId: googleUser.sub },
                     { email: googleUser.email }
@@ -84,6 +84,7 @@ class googleAuthController {
             });
 
             responseReturn(res, 200, {
+                success: true,
                 message: 'Google authentication successful',
                 user: {
                     id: customer._id,
