@@ -12,14 +12,28 @@ const { mongo: { ObjectId } } = require('mongoose')
 const { responseReturn } = require('../../utiles/response')
 
 module.exports.get_seller_dashboard_data = async (req, res) => {
-    const { id } = req;
+    let sellerId;
+    const isAdmin = req.role === 'admin';
+
+    // Admin requesting specific seller data
+    if (isAdmin && req.query.forSeller) {
+        sellerId = req.query.forSeller;
+    }
+    // Seller requesting their own data
+    else if (req.id) {
+        sellerId = req.id;
+    }
+    // Unauthorized access
+    else {
+        return responseReturn(res, 401, { message: 'Unauthorized access' });
+    }
 
     try {
-        const totalSele = await sellerWallet.aggregate([
+        const totalSale = await sellerWallet.aggregate([
             {
                 $match: {
                     sellerId: {
-                        $eq: id
+                        $eq: sellerId
                     }
                 }
             }, {
@@ -28,21 +42,21 @@ module.exports.get_seller_dashboard_data = async (req, res) => {
                     totalAmount: { $sum: '$amount' }
                 }
             }
-        ])
+        ]);
 
         const totalProduct = await productModel.find({
-            sellerId: new ObjectId(id)
-        }).countDocuments()
+            sellerId: new ObjectId(sellerId)
+        }).countDocuments();
 
         const totalOrder = await authorOrder.find({
-            sellerId: new ObjectId(id)
-        }).countDocuments()
+            sellerId: new ObjectId(sellerId)
+        }).countDocuments();
 
         const totalPendingOrder = await authorOrder.find({
             $and: [
                 {
                     sellerId: {
-                        $eq: new ObjectId(id)
+                        $eq: new ObjectId(sellerId)
                     }
                 },
                 {
@@ -51,37 +65,38 @@ module.exports.get_seller_dashboard_data = async (req, res) => {
                     }
                 }
             ]
-        }).countDocuments()
+        }).countDocuments();
 
         const messages = await sellerCustomerMessage.find({
             $or: [
                 {
                     senderId: {
-                        $eq: id
+                        $eq: sellerId
                     }
                 },
                 {
                     receverId: {
-                        $eq: id
+                        $eq: sellerId
                     }
                 }
             ]
-        }).limit(3)
+        }).limit(3);
 
         const recentOrders = await authorOrder.find({
-            sellerId: new ObjectId(id)
-        }).limit(5)
+            sellerId: new ObjectId(sellerId)
+        }).limit(5);
 
         responseReturn(res, 200, {
             totalOrder,
-            totalSale: totalSele.length > 0 ? totalSele[0].totalAmount : 0,
+            totalSale: totalSale.length > 0 ? totalSale[0].totalAmount : 0,
             totalPendingOrder,
             messages,
             recentOrders,
             totalProduct
-        })
+        });
     } catch (error) {
-        console.log('get seller dashboard data error ' + error.messages)
+        console.log('get seller dashboard data error ' + error.message);
+        responseReturn(res, 500, { error: error.message });
     }
 }
 

@@ -26,6 +26,18 @@ const sellerSchema = new Schema({
         type: String,
         default: 'inactive'
     },
+    flutterwaveDetails: {
+        subaccountId: String,
+        recipientId: String,
+        accountNumber: String,
+        bankCode: String,
+        bankName: String,
+        recipientVerified: Boolean,
+        currency: {
+            type: String,
+            default: 'NGN'
+        }
+    },
     method: {
         type: String,
         required: true,
@@ -35,11 +47,35 @@ const sellerSchema = new Schema({
         default: ''
     },
     shopInfo: {
-        type: Object,
-        default: {}
-    },
+        shopName: String,
+        division: String,
+        district: String,
+        sub_district: String,
+        businessType: {
+            type: String,
+            enum: ['small', 'registered'],
+            default: 'small'
+        },
+        cacNumber: String,
+        companyName: String,
+        companyEmail: String,
+        tin: String,
+        postalCode: String,
+        documentType: String,
+        document: String,
+        id_number: String, // ADDED ID NUMBER FIELD
+        documentVerification: {
+            status: {
+                type: String,
+                enum: ['pending', 'verified', 'manual_review', 'failed', 'error'],
+                default: 'pending'
+            },
+            checks: [String],
+            issues: [String],
+            lastVerified: Date
+        }
+    }
 }, { timestamps: true })
-
 
 sellerSchema.index({
     name: 'text',

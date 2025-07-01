@@ -15,9 +15,9 @@ class sellerController {
         try {
             let query = { status: 'pending' };
             if (searchValue) {
-                query = { 
+                query = {
                     ...query,
-                    $text: { $search: searchValue } 
+                    $text: { $search: searchValue }
                 };
             }
 
@@ -32,10 +32,10 @@ class sellerController {
 
             responseReturn(res, 200, { totalSeller, sellers });
         } catch (error) {
-            responseReturn(res, 500, { 
-                error: process.env.NODE_ENV === 'development' 
-                    ? error.message 
-                    : 'Server error fetching seller requests' 
+            responseReturn(res, 500, {
+                error: process.env.NODE_ENV === 'development'
+                    ? error.message
+                    : 'Server error fetching seller requests'
             });
         }
     }
@@ -56,10 +56,10 @@ class sellerController {
 
             responseReturn(res, 200, { seller });
         } catch (error) {
-            responseReturn(res, 500, { 
-                error: process.env.NODE_ENV === 'development' 
-                    ? error.message 
-                    : 'Server error fetching seller' 
+            responseReturn(res, 500, {
+                error: process.env.NODE_ENV === 'development'
+                    ? error.message
+                    : 'Server error fetching seller'
             });
         }
     }
@@ -69,11 +69,11 @@ class sellerController {
         try {
             const { sellerId } = req.params;
             let { page = 1, parPage = 12 } = req.query;
-            
+
             // Validate inputs
             page = Math.max(1, parseInt(page));
             parPage = Math.max(1, parseInt(parPage));
-            
+
             if (!this.validateObjectId(sellerId)) {
                 return responseReturn(res, 400, { error: 'Invalid seller ID format' });
             }
@@ -88,17 +88,17 @@ class sellerController {
                 Product.countDocuments({ sellerId })
             ]);
 
-            responseReturn(res, 200, { 
-                products, 
-                totalProducts, 
-                currentPage: page, 
-                parPage 
+            responseReturn(res, 200, {
+                products,
+                totalProducts,
+                currentPage: page,
+                parPage
             });
         } catch (error) {
-            responseReturn(res, 500, { 
-                error: process.env.NODE_ENV === 'development' 
-                    ? error.message 
-                    : 'Server error fetching seller products' 
+            responseReturn(res, 500, {
+                error: process.env.NODE_ENV === 'development'
+                    ? error.message
+                    : 'Server error fetching seller products'
             });
         }
     }
@@ -107,7 +107,7 @@ class sellerController {
     get_seller_details = async (req, res) => {
         try {
             const { sellerId } = req.params;
-            
+
             if (!this.validateObjectId(sellerId)) {
                 return responseReturn(res, 400, { error: 'Invalid seller ID format' });
             }
@@ -120,15 +120,15 @@ class sellerController {
                 Product.countDocuments({ sellerId })
             ]);
 
-            responseReturn(res, 200, { 
-                seller: { ...seller, totalProducts } 
+            responseReturn(res, 200, {
+                seller: { ...seller, totalProducts }
             });
         } catch (error) {
             const statusCode = error.message === 'Seller not found' ? 404 : 500;
-            responseReturn(res, statusCode, { 
-                error: statusCode === 404 
-                    ? error.message 
-                    : 'Server error fetching seller details' 
+            responseReturn(res, statusCode, {
+                error: statusCode === 404
+                    ? error.message
+                    : 'Server error fetching seller details'
             });
         }
     }
@@ -152,15 +152,15 @@ class sellerController {
                 return responseReturn(res, 404, { error: 'Seller not found' });
             }
 
-            responseReturn(res, 200, { 
-                seller: updatedSeller, 
-                message: 'Seller status updated successfully' 
+            responseReturn(res, 200, {
+                seller: updatedSeller,
+                message: 'Seller status updated successfully'
             });
         } catch (error) {
-            responseReturn(res, 500, { 
-                error: process.env.NODE_ENV === 'development' 
-                    ? error.message 
-                    : 'Server error updating seller status' 
+            responseReturn(res, 500, {
+                error: process.env.NODE_ENV === 'development'
+                    ? error.message
+                    : 'Server error updating seller status'
             });
         }
     }
@@ -187,10 +187,10 @@ class sellerController {
 
             responseReturn(res, 200, { totalSeller, sellers });
         } catch (error) {
-            responseReturn(res, 500, { 
-                error: process.env.NODE_ENV === 'development' 
-                    ? error.message 
-                    : 'Server error fetching active sellers' 
+            responseReturn(res, 500, {
+                error: process.env.NODE_ENV === 'development'
+                    ? error.message
+                    : 'Server error fetching active sellers'
             });
         }
     }
@@ -217,10 +217,10 @@ class sellerController {
 
             responseReturn(res, 200, { totalSeller, sellers });
         } catch (error) {
-            responseReturn(res, 500, { 
-                error: process.env.NODE_ENV === 'development' 
-                    ? error.message 
-                    : 'Server error fetching deactivated sellers' 
+            responseReturn(res, 500, {
+                error: process.env.NODE_ENV === 'development'
+                    ? error.message
+                    : 'Server error fetching deactivated sellers'
             });
         }
     }

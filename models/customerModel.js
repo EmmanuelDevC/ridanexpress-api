@@ -11,7 +11,15 @@ const customerSchema = new Schema({
   verificationExpires: Date,
   resetPasswordToken: String,
   resetPasswordExpire: Date,
-  
+
+  googleId: { type: String, unique: true, sparse: true },
+  method: {
+    type: String,
+    required: true,
+    enum: ['manually', 'google'],
+    default: 'manually'
+  },
+
   active: {
     type: Boolean,
     default: true
