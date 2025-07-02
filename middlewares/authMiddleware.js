@@ -1,27 +1,25 @@
 const jwt = require('jsonwebtoken');
 
 module.exports.authMiddleware = async (req, res, next) => {
-    const { authorization } = req.headers
+    const tokenFromHeader = req.headers.authorization?.split(' ')[1];
+    const tokenFromCookie = req.cookies?.customerToken;
 
-    if (authorization) {
-        const token = authorization.split(' ')[1]
-        if (token) {
-            try {
-                const userInfo = await jwt.verify(token, process.env.SECRET)
-                req.role = userInfo.role
-                req.id = userInfo.id
-                next()
-            } catch (error) {
-                return res.status(401).json({ message: 'unauthorized' })
-            }
-        } else {
-            return res.status(401).json({ message: 'unauthorized' })
+    const token = tokenFromHeader || tokenFromCookie;
+
+    if (token) {
+        try {
+            const userInfo = await jwt.verify(token, process.env.SECRET);
+            req.role = userInfo.role;
+            req.id = userInfo.id;
+            return next();
+        } catch (error) {
+            return res.status(401).json({ message: 'Unauthorized: Invalid token' });
         }
-    } else {
-        return res.status(401).json({ message: 'unauthorized' })
     }
 
-}
+    return res.status(401).json({ message: 'Unauthorized: No token provided' });
+};
+
 
 // Optional auth with version checking
 module.exports.optionalAuthMiddleware = async (req, res, next) => {
