@@ -20,6 +20,63 @@ cloudinary.config({
 });
 
 class authControllers {
+
+    refresh_token = async (req, res) => {
+        const refreshToken = req.cookies.refreshToken;
+
+        if (!refreshToken) {
+            return res.status(401).json({ error: 'Refresh token missing' });
+        }
+
+        try {
+            const payload = jwt.verify(refreshToken, process.env.REFRESH_SECRET);
+
+            // Create new access token
+            const accessToken = jwt.sign(
+                {
+                    sub: payload.sub,
+                    role: payload.role,
+                    status: payload.status
+                },
+                process.env.JWT_SECRET,
+                { expiresIn: '15m' }
+            );
+
+            res.json({ accessToken });
+        } catch (err) {
+            res.status(401).json({ error: 'Invalid refresh token' });
+        }
+    }
+
+    // In your authController.js
+    verify_token = async (req, res) => {
+        const { token } = req.body;
+        console.log('Received token for verification:', token ? token.substring(0, 20) + '...' : 'null');
+
+        if (!token) {
+            console.log('No token provided');
+            return res.json({ valid: false });
+        }
+
+        try {
+            console.log('Verifying token...');
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            console.log('Token valid. Decoded:', decoded);
+
+            res.json({
+                valid: true,
+                user: {
+                    id: decoded.id,
+                    role: decoded.role,
+                    status: decoded.status || 'active'
+                }
+            });
+        } catch (err) {
+            console.error('Token verification error:', err.message);
+            res.json({ valid: false });
+        }
+    };
+
     admin_login = async (req, res) => {
         const { email, password } = req.body;
         try {
@@ -31,10 +88,27 @@ class authControllers {
                         id: admin.id,
                         role: admin.role
                     });
+
+                    // Create sanitized user info
+                    const userInfo = {
+                        _id: admin._id,
+                        name: admin.name,
+                        email: admin.email,
+                        role: admin.role,
+                        status: 'active',
+                        image: admin.image || ''
+                    };
+
                     res.cookie('accessToken', token, {
                         expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
                     });
-                    responseReturn(res, 200, { token, message: 'Login success' });
+
+                    // Return userInfo in response
+                    responseReturn(res, 200, {
+                        token,
+                        message: 'Login success',
+                        userInfo
+                    });
                 } else {
                     responseReturn(res, 404, { error: "Password wrong" });
                 }
@@ -48,7 +122,6 @@ class authControllers {
 
     seller_login = async (req, res) => {
         const { email, password } = req.body;
-        console.log('Received:', { email, password }); // ✅ Add this
         try {
             const seller = await sellerModel.findOne({ email }).select('+password');
             if (seller) {
@@ -56,12 +129,34 @@ class authControllers {
                 if (match) {
                     const token = await createToken({
                         id: seller.id,
-                        role: seller.role
+                        role: seller.role,
+                        status: seller.status // Include status in token
                     });
+
+                    // Create sanitized user info
+                    const userInfo = {
+                        _id: seller._id,
+                        name: seller.name,
+                        email: seller.email,
+                        role: seller.role,
+                        status: seller.status,
+                        image: seller.image || '',
+                        shopInfo: {
+                            shopName: seller.shopInfo?.shopName || '',
+                            businessType: seller.shopInfo?.businessType || ''
+                        }
+                    };
+
                     res.cookie('accessToken', token, {
                         expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
                     });
-                    responseReturn(res, 200, { token, message: 'Login success' });
+
+                    // Return userInfo in response
+                    responseReturn(res, 200, {
+                        token,
+                        message: 'Login success',
+                        userInfo
+                    });
                 } else {
                     responseReturn(res, 404, { error: "Password wrong" });
                 }
@@ -69,7 +164,6 @@ class authControllers {
                 responseReturn(res, 404, { error: "Email not found" });
             }
         } catch (error) {
-            console.error("Login error:", error); // ✅ Log error details
             responseReturn(res, 500, { error: error.message });
         }
     }
@@ -86,6 +180,7 @@ class authControllers {
                     email,
                     password: await bcrpty.hash(password, 10),
                     method: 'menualy',
+                    status: 'pending', // Set initial status
                     shopInfo: {
                         shopName: '',
                         division: '',
@@ -110,11 +205,36 @@ class authControllers {
                 await sellerCustomerModel.create({
                     myId: seller.id
                 });
-                const token = await createToken({ id: seller.id, role: seller.role });
+                const token = await createToken({
+                    id: seller.id,
+                    role: seller.role,
+                    status: seller.status
+                });
+
+                // Create sanitized user info
+                const userInfo = {
+                    _id: seller._id,
+                    name: seller.name,
+                    email: seller.email,
+                    role: seller.role,
+                    status: seller.status,
+                    image: seller.image || '',
+                    shopInfo: {
+                        shopName: seller.shopInfo?.shopName || '',
+                        businessType: seller.shopInfo?.businessType || ''
+                    }
+                };
+
                 res.cookie('accessToken', token, {
                     expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
                 });
-                responseReturn(res, 201, { token, message: 'Register success' });
+
+                // Return userInfo in response
+                responseReturn(res, 201, {
+                    token,
+                    message: 'Register success',
+                    userInfo
+                });
             }
         } catch (error) {
             responseReturn(res, 500, { error: 'Internal server error' });
@@ -126,10 +246,34 @@ class authControllers {
         try {
             if (role === 'admin') {
                 const user = await adminModel.findById(id);
-                responseReturn(res, 200, { userInfo: user });
+                // Return consistent userInfo structure
+                responseReturn(res, 200, {
+                    userInfo: {
+                        _id: user._id,
+                        name: user.name,
+                        email: user.email,
+                        role: user.role,
+                        status: 'active',
+                        image: user.image || ''
+                    }
+                });
             } else {
                 const seller = await sellerModel.findById(id);
-                responseReturn(res, 200, { userInfo: seller });
+                // Return consistent userInfo structure
+                responseReturn(res, 200, {
+                    userInfo: {
+                        _id: seller._id,
+                        name: seller.name,
+                        email: seller.email,
+                        role: seller.role,
+                        status: seller.status,
+                        image: seller.image || '',
+                        shopInfo: {
+                            shopName: seller.shopInfo?.shopName || '',
+                            businessType: seller.shopInfo?.businessType || ''
+                        }
+                    }
+                });
             }
         } catch (error) {
             responseReturn(res, 500, { error: 'Internal server error' });
@@ -153,13 +297,21 @@ class authControllers {
 
                 if (result) {
                     await sellerModel.findByIdAndUpdate(id, { image: result.url });
-                    const userInfo = await sellerModel.findById(id);
+                    const seller = await sellerModel.findById(id);
 
-                    // Audit log
-                    await this.logAction(req, 'PROFILE_IMAGE_UPDATE', 'account', id, {
-                        image_size: image.size,
-                        image_type: image.mimetype
-                    });
+                    // Return consistent userInfo structure
+                    const userInfo = {
+                        _id: seller._id,
+                        name: seller.name,
+                        email: seller.email,
+                        role: seller.role,
+                        status: seller.status,
+                        image: seller.image || '',
+                        shopInfo: {
+                            shopName: seller.shopInfo?.shopName || '',
+                            businessType: seller.shopInfo?.businessType || ''
+                        }
+                    };
 
                     responseReturn(res, 201, { message: 'Image upload success', userInfo });
                 } else {
@@ -329,6 +481,19 @@ class authControllers {
                     updateCommand,
                     { new: true, runValidators: true }
                 );
+
+                const userInfo = {
+                    _id: updatedSeller._id,
+                    name: updatedSeller.name,
+                    email: updatedSeller.email,
+                    role: updatedSeller.role,
+                    status: updatedSeller.status,
+                    image: updatedSeller.image || '',
+                    shopInfo: {
+                        shopName: updatedSeller.shopInfo?.shopName || '',
+                        businessType: updatedSeller.shopInfo?.businessType || ''
+                    }
+                };
 
                 if (!updatedSeller) {
                     return responseReturn(res, 404, { error: 'Seller not found' });
