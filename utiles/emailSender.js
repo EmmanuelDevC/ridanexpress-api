@@ -46,7 +46,7 @@ const sendVerificationEmail = async (email, token) => {
                 </p>
 
                 <div style="text-align: center; margin: 40px 0;">
-                    <a href="https://martafrik.vercel.app/verify-email?token=${token}" 
+                    <a href="https://ridanexpress.vercel.app/verify-email?token=${token}" 
                        style="
                            background-color: #3498db;
                            color: white;
