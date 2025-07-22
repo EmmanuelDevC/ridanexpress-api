@@ -61,9 +61,6 @@ const sellerSchema = new Schema({
         companyEmail: String,
         tin: String,
         postalCode: String,
-        documentType: String,
-        document: String,
-        id_number: String, // ADDED ID NUMBER FIELD
         documentVerification: {
             status: {
                 type: String,

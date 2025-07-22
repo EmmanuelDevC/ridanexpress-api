@@ -9,6 +9,8 @@ router.post('/profile-image-upload', authMiddleware, authControllers.profile_ima
 router.post('/profile-info-add', authMiddleware, authControllers.profile_info_add)
 router.post('/verify-token', authMiddleware, authControllers.verify_token);
 router.post('/refresh-token', authMiddleware, authControllers.refresh_token)
+router.post('/create-inquiry', authMiddleware, authControllers.create_inquiry);
+router.post('/persona-webhook', authControllers.persona_webhook);
 
 router.get('/logout', authMiddleware, authControllers.logout)
 

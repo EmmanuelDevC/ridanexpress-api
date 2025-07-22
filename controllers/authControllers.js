@@ -179,8 +179,13 @@ class authControllers {
                     name,
                     email,
                     password: await bcrpty.hash(password, 10),
-                    method: 'menualy',
-                    status: 'pending', // Set initial status
+                    method: 'manually',
+                    status: 'pending',
+                    security: { // Initialize security field
+                        documentUploadCount: 0,
+                        lastDocumentUpload: null,
+                        verificationHistory: []
+                    },
                     shopInfo: {
                         shopName: '',
                         division: '',
@@ -239,6 +244,7 @@ class authControllers {
         } catch (error) {
             responseReturn(res, 500, { error: 'Internal server error' });
         }
+
     }
 
     getUser = async (req, res) => {
@@ -332,33 +338,53 @@ class authControllers {
                     return responseReturn(res, 400, { error: err.message });
                 }
 
+                // Get seller with security initialization
+                let seller = await sellerModel.findById(req.id);
+                if (!seller) {
+                    return responseReturn(res, 404, { error: 'Seller not found' });
+                }
+
+                // Initialize security if missing
+                if (!seller.security) {
+                    seller.security = {
+                        documentUploadCount: 0,
+                        lastDocumentUpload: null,
+                        verificationHistory: []
+                    };
+                    await seller.save();
+                }
+
                 // File validation
                 if (files.document) {
                     // File type validation
                     const allowedMimes = ['image/jpeg', 'image/png', 'application/pdf'];
                     if (!allowedMimes.includes(files.document.mimetype)) {
                         await fs.unlink(files.document.filepath);
-                        return responseReturn(res, 400, { error: 'Invalid file type' });
+                        return responseReturn(res, 400, { error: 'Invalid file type. Only JPG, PNG, or PDF allowed' });
                     }
 
                     // File size validation
-                    const maxSize = process.env.DOCUMENT_MAX_SIZE || 5 * 1024 * 1024; // 5MB
+                    const maxSize = 5 * 1024 * 1024; // 5MB
                     if (files.document.size > maxSize) {
                         await fs.unlink(files.document.filepath);
-                        return responseReturn(res, 400, { error: 'File exceeds size limit' });
+                        return responseReturn(res, 400, { error: 'File exceeds size limit of 5MB' });
                     }
 
                     // Check upload limits
-                    const seller = await sellerModel.findById(req.id);
                     if (seller.security.documentUploadCount >= 3) {
                         const lastUpload = seller.security.lastDocumentUpload;
-                        const hoursSinceLast = (new Date() - lastUpload) / (1000 * 60 * 60);
+                        const hoursSinceLast = lastUpload ?
+                            (new Date() - lastUpload) / (1000 * 60 * 60) : 0;
 
                         if (hoursSinceLast < 24) {
                             await fs.unlink(files.document.filepath);
                             return responseReturn(res, 429, {
                                 error: 'Document upload limit exceeded. Try again tomorrow.'
                             });
+                        } else {
+                            // Reset counter if last upload was more than 24 hours ago
+                            seller.security.documentUploadCount = 0;
+                            await seller.save();
                         }
                     }
 
@@ -382,13 +408,7 @@ class authControllers {
                     'shopInfo.cacNumber': fields.cacNumber || '',
                     'shopInfo.tin': fields.tin || '',
                     'shopInfo.postalCode': fields.postalCode || '',
-                    'shopInfo.documentType': fields.documentType || '',
-                    'shopInfo.id_number': fields.id_number || '',
-                    'shopInfo.documentVerification': {
-                        status: 'pending',
-                        checks: [],
-                        issues: []
-                    }
+                    'shopInfo.documentVerification.status': 'pending' // Set to pending
                 };
 
                 // Process document if uploaded
@@ -401,7 +421,6 @@ class authControllers {
                                 'prod_id_verification' : 'dev_id_verification',
                             context: `id_type=${fields.documentType}|seller_id=${req.id}|verification=required`,
                             resource_type: 'auto',
-                            moderation: 'manual', // Enable Cloudinary manual review
                             quality_analysis: true
                         };
 
@@ -421,20 +440,14 @@ class authControllers {
                             documentUrl
                         );
 
+                        // Update verification data
                         updateData['shopInfo.documentVerification'] = verificationResults;
 
-                        // ===== DOCUMENT METADATA UPDATES =====
                         // Set expiration date (default 1 year)
-                        const expiryDays = parseInt(process.env.DOCUMENT_EXPIRY_DAYS) || 365;
+                        const expiryDays = 365;
                         updateData['shopInfo.documentExpiration'] = new Date(
                             Date.now() + expiryDays * 24 * 60 * 60 * 1000
                         );
-
-                        // Store verification ID if available
-                        if (verificationResults.verificationId) {
-                            updateData['shopInfo.documentVerification.verificationId'] =
-                                verificationResults.verificationId;
-                        }
 
                         // Update verification history
                         updateData.$push = {
@@ -449,7 +462,6 @@ class authControllers {
                         // Track upload activity
                         updateData.$inc = { 'security.documentUploadCount': 1 };
                         updateData['security.lastDocumentUpload'] = new Date();
-                        // ===== END METADATA UPDATES =====
 
                         // Delete temp file after upload
                         await fs.unlink(files.document.filepath);
@@ -478,10 +490,12 @@ class authControllers {
                 // Update seller in database
                 const updatedSeller = await sellerModel.findByIdAndUpdate(
                     req.id,
-                    updateCommand,
+                    { $set: updateData },
                     { new: true, runValidators: true }
                 );
 
+
+                // Create sanitized user info for response
                 const userInfo = {
                     _id: updatedSeller._id,
                     name: updatedSeller.name,
@@ -490,14 +504,12 @@ class authControllers {
                     status: updatedSeller.status,
                     image: updatedSeller.image || '',
                     shopInfo: {
-                        shopName: updatedSeller.shopInfo?.shopName || '',
-                        businessType: updatedSeller.shopInfo?.businessType || ''
+                        shopName: updatedSeller.shopInfo.shopName || '',
+                        businessType: updatedSeller.shopInfo.businessType || '',
+                        document: updatedSeller.shopInfo.document || null,
+                        documentVerification: updatedSeller.shopInfo.documentVerification || {}
                     }
                 };
-
-                if (!updatedSeller) {
-                    return responseReturn(res, 404, { error: 'Seller not found' });
-                }
 
                 // Audit log
                 await this.logAction(
@@ -507,19 +519,19 @@ class authControllers {
                     req.id,
                     {
                         documentType: fields.documentType,
-                        verificationStatus: updateData['shopInfo.documentVerification'].status,
+                        verificationStatus: updateData['shopInfo.documentVerification']?.status || 'none',
                         fileUploaded: !!files.document
                     }
                 );
 
                 responseReturn(res, 200, {
                     message: 'Profile info updated successfully',
-                    userInfo: updatedSeller
+                    userInfo
                 });
             });
         } catch (error) {
             console.error('Profile update error:', error);
-            responseReturn(res, 500, { error: error.message });
+            responseReturn(res, 500, { error: 'Internal server error' });
         }
     };
 
@@ -554,112 +566,83 @@ class authControllers {
         }
     };
 
-    // Dojah verification
-    verifyWithDojah = async (documentType, idNumber, documentUrl) => {
-        const results = {
-            status: 'pending',
-            checks: [],
-            issues: [],
-            verificationId: ''
-        };
+    create_inquiry = async (req, res) => {
+        const { id } = req; // seller id
 
         try {
-            // Skip in development if no API keys
-            if (process.env.NODE_ENV !== 'production' &&
-                (!process.env.DOJAH_APP_ID || !process.env.DOJAH_SECRET_KEY)) {
-                results.checks.push('Skipped in development');
-                return results;
+            const seller = await sellerModel.findById(id);
+            if (!seller) {
+                return responseReturn(res, 404, { error: 'Seller not found' });
             }
 
-            // Map document types to Dojah types
-            const dojahTypes = {
-                national_id: 'NIN',
-                passport: 'PASSPORT',
-                driver_license: 'DRIVER_LICENSE',
-                voter_card: 'VOTER_ID'
-            };
-
-            if (!dojahTypes[documentType]) {
-                results.status = 'manual_review';
-                results.issues.push('Document type not supported for auto-verification');
-                return results;
-            }
-
-            // Prepare Dojah request
-            const payload = {
-                document_type: dojahTypes[documentType],
-                document_number: idNumber,
-                image_url: documentUrl,
-                country: 'NG' // Nigeria
-            };
-
-            // Call Dojah API
+            // Create inquiry in Persona
             const response = await axios.post(
-                'https://api.dojah.io/api/v1/document/verification',
-                payload,
+                'https://api.withpersona.com/v1/inquiries',
+                {
+                    data: {
+                        type: 'inquiry',
+                        attributes: {
+                            inquiry_template_id: process.env.PERSONA_TEMPLATE_ID,
+                            reference_id: id,
+                            fields: {
+                                name: seller.name,
+                                email: seller.email
+                            }
+                        }
+                    }
+                },
                 {
                     headers: {
-                        'AppId': process.env.DOJAH_APP_ID,
-                        'Authorization': process.env.DOJAH_SECRET_KEY,
-                        'Content-Type': 'application/json'
+                        'Authorization': `Bearer ${process.env.PERSONA_API_KEY}`,
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
                     }
                 }
             );
 
-            const verificationData = response.data;
+            const hostedUrl = response.data.data.attributes.hosted_url;
+            responseReturn(res, 200, { hostedUrl });
 
-            // Handle Dojah response
-            if (verificationData.status === 'verified') {
-                results.status = 'verified';
-                results.checks = ['Document validated by Dojah'];
-
-                // Additional checks
-                if (verificationData.data.expiry_date) {
-                    const expiry = new Date(verificationData.data.expiry_date);
-                    if (expiry < new Date()) {
-                        results.issues.push('Document has expired');
-                        results.status = 'failed';
-                    } else {
-                        results.checks.push('Document is valid');
-                    }
-                }
-
-                // Add validation details
-                if (verificationData.validation) {
-                    Object.entries(verificationData.validation).forEach(([key, valid]) => {
-                        if (valid) {
-                            results.checks.push(`${key.replace(/_/g, ' ')} validated`);
-                        } else {
-                            results.issues.push(`${key.replace(/_/g, ' ')} mismatch`);
-                        }
-                    });
-                }
-            } else if (verificationData.status === 'pending') {
-                results.status = 'manual_review';
-                results.checks = ['Document submitted for manual review'];
-            } else {
-                results.status = 'failed';
-                results.issues = verificationData.errors || ['Verification failed'];
-            }
         } catch (error) {
-            console.error('Dojah verification error:', error);
-            results.status = 'error';
-
-            if (error.response) {
-                const dojahError = error.response.data;
-                if (dojahError.error === 'Insufficient balance') {
-                    results.issues.push('Verification service temporarily unavailable');
-                } else if (dojahError.error === 'Invalid document type') {
-                    results.issues.push('Unsupported document type');
-                } else {
-                    results.issues.push(`Dojah error: ${dojahError.message}`);
-                }
-            } else {
-                results.issues.push('Verification service unavailable');
-            }
+            console.error('Persona error:', error.response ? error.response.data : error.message);
+            responseReturn(res, 500, { error: 'Unable to create verification session' });
         }
+    };
 
-        return results;
+    persona_webhook = async (req, res) => {
+        const event = req.body;
+
+        try {
+            // Verify webhook signature here in production
+            // if (process.env.NODE_ENV === 'production') { ... }
+
+            if (event.data.type === 'inquiry') {
+                const inquiry = event.data;
+                const referenceId = inquiry.attributes.reference_id;
+                const status = inquiry.attributes.status;
+
+                if (status === 'completed') {
+                    const verificationStatus = inquiry.attributes.decision?.status === 'approved'
+                        ? 'verified'
+                        : 'failed';
+
+                    await sellerModel.findByIdAndUpdate(
+                        referenceId,
+                        {
+                            'shopInfo.documentVerification.status': verificationStatus,
+                            'shopInfo.documentVerification.lastVerified': new Date()
+                        }
+                    );
+
+                    console.log(`Updated verification status for seller ${referenceId}: ${verificationStatus}`);
+                }
+            }
+
+            res.status(200).json({ received: true });
+        } catch (error) {
+            console.error('Persona webhook error:', error);
+            res.status(500).json({ error: 'Webhook processing failed' });
+        }
     };
 
     logout = async (req, res) => {
