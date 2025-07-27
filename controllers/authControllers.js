@@ -566,6 +566,7 @@ class authControllers {
         }
     };
 
+    // authController.js
     create_inquiry = async (req, res) => {
         const { id } = req; // seller id
 
@@ -575,9 +576,17 @@ class authControllers {
                 return responseReturn(res, 404, { error: 'Seller not found' });
             }
 
+            // Check if Persona environment variables are set
+            if (!process.env.PERSONA_API_KEY || !process.env.PERSONA_TEMPLATE_ID) {
+                return responseReturn(res, 500, {
+                    error: 'Persona configuration missing - check environment variables'
+                });
+            }
+
             // Create inquiry in Persona
             const response = await axios.post(
-                'https://api.withpersona.com/v1/inquiries',
+                'https://api.sandbox.withpersona.com/v1/inquiries',
+                
                 {
                     data: {
                         type: 'inquiry',
@@ -595,19 +604,35 @@ class authControllers {
                     headers: {
                         'Authorization': `Bearer ${process.env.PERSONA_API_KEY}`,
                         'Content-Type': 'application/json',
-                        'Accept': 'application/json'
-                    }
+                        'Accept': 'application/json',
+                        'Persona-Version': '2023-01-05' // Add API version
+                    },
+                    timeout: 10000 // 10-second timeout
                 }
             );
 
-            const hostedUrl = response.data.data.attributes.hosted_url;
-            responseReturn(res, 200, { hostedUrl });
+            if (response.data.data?.attributes?.hosted_url) {
+                return responseReturn(res, 200, {
+                    hostedUrl: response.data.data.attributes.hosted_url
+                });
+            } else {
+                return responseReturn(res, 500, {
+                    error: 'Persona response missing hosted URL'
+                });
+            }
 
         } catch (error) {
-            console.error('Persona error:', error.response ? error.response.data : error.message);
-            responseReturn(res, 500, { error: 'Unable to create verification session' });
+            console.error('Persona API error:', error.response?.data || error.message);
+
+            let errorMessage = 'Unable to create verification session';
+            if (error.response?.data?.errors) {
+                errorMessage += `: ${error.response.data.errors.map(e => e.detail).join(', ')}`;
+            }
+
+            return responseReturn(res, 500, { error: errorMessage });
         }
     };
+
 
     persona_webhook = async (req, res) => {
         const event = req.body;
