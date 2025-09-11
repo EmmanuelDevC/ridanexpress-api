@@ -33,7 +33,6 @@ const productSchema = new Schema({
         type: Number,
         required: true
     },
-
     description: {
         type: String,
         required: true
@@ -49,8 +48,16 @@ const productSchema = new Schema({
     rating: {
         type: Number,
         default: 0
-    }
+    },
+    // Add admin approval fields
+    status: {
+        type: String,
+        enum: ['pending', 'approved', 'rejected'],
+        default: 'pending'
+    },
+    rejectionReason: String
 }, { timestamps: true })
+
 
 productSchema.index({
     name: 'text',

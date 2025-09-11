@@ -2,6 +2,10 @@ const router = require('express').Router();
 const { authMiddleware, optionalAuthMiddleware } = require('../../middlewares/authMiddleware');
 const flutterwaveController = require('../../controllers/dashboard/flutterwaveController');
 const sellerController = require('../../controllers/dashboard/sellerController');
+ 
+
+router.get('/auto-reply/:sellerId', sellerController.getAutoReplyConfig);
+router.post('/auto-reply', sellerController.saveAutoReplyConfig);
 
 router.get('/request-seller-get', authMiddleware, sellerController.get_seller_request);
 router.get('/get-sellers', authMiddleware, sellerController.get_active_sellers);

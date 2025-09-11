@@ -10,6 +10,7 @@ const { createToken } = require('../utiles/tokenCreate');
 const fs = require('fs').promises;
 const FormData = require('form-data');
 const AuditLog = require('../models/auditLogModel');
+const jwt = require('jsonwebtoken'); // Added missing jwt import
 
 // Configure Cloudinary
 cloudinary.config({
@@ -20,6 +21,27 @@ cloudinary.config({
 });
 
 class authControllers {
+
+    // ======== ADDED MISSING METHOD ========
+    logAction = async (req, action, entityType, entityId, details) => {
+        try {
+            await AuditLog.create({
+                action,
+                entityType,
+                entityId,
+                details,
+                user: {
+                    id: req.id,
+                    role: req.role
+                },
+                ipAddress: req.ip,
+                userAgent: req.headers['user-agent'],
+                timestamp: new Date()
+            });
+        } catch (error) {
+            console.error('Audit log creation failed:', error);
+        }
+    }
 
     refresh_token = async (req, res) => {
         const refreshToken = req.cookies.refreshToken;
@@ -48,7 +70,6 @@ class authControllers {
         }
     }
 
-    // In your authController.js
     verify_token = async (req, res) => {
         const { token } = req.body;
         console.log('Received token for verification:', token ? token.substring(0, 20) + '...' : 'null');
@@ -434,11 +455,18 @@ class authControllers {
                         updateData['shopInfo.document'] = documentUrl;
 
                         // Process verification with Dojah
-                        const verificationResults = await this.verifyWithDojah(
-                            fields.documentType,
-                            fields.id_number,
-                            documentUrl
-                        );
+                        // PLACEHOLDER - REPLACE WITH ACTUAL IMPLEMENTATION
+                        const verificationResults = {
+                            status: 'pending',
+                            checks: [],
+                            issues: ['Verification service not implemented']
+                        };
+                        // Actual implementation would look like:
+                        // const verificationResults = await this.verifyWithDojah(
+                        //   fields.documentType,
+                        //   fields.id_number,
+                        //   documentUrl
+                        // );
 
                         // Update verification data
                         updateData['shopInfo.documentVerification'] = verificationResults;
@@ -490,7 +518,7 @@ class authControllers {
                 // Update seller in database
                 const updatedSeller = await sellerModel.findByIdAndUpdate(
                     req.id,
-                    { $set: updateData },
+                    updateCommand, // Use the combined update command
                     { new: true, runValidators: true }
                 );
 
@@ -511,7 +539,7 @@ class authControllers {
                     }
                 };
 
-                // Audit log
+                // Audit log - FIXED: Now using the added logAction method
                 await this.logAction(
                     req,
                     'PROFILE_UPDATE',

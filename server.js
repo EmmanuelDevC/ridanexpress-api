@@ -1,29 +1,30 @@
-const express = require('express')
-const { dbConnect } = require('./utiles/db')
-const path = require('path')
-const app = express()
-const cors = require('cors')
-const http = require('http')
-const bodyParser = require('body-parser')
-const cookieParser = require('cookie-parser')
-require('dotenv').config()
+const express = require('express');
+const { dbConnect } = require('./utiles/db');
+const path = require('path');
+const app = express();
+const cors = require('cors');
+const http = require('http');
+const bodyParser = require('body-parser');
+const cookieParser = require('cookie-parser');
+const adminRoutes = require('./routes/adminRoutes');
+require('dotenv').config();
 
-const socket = require('socket.io')
-const mode = process.env.mode
-const server = http.createServer(app)
+const socket = require('socket.io');
+const server = http.createServer(app);
 
 app.use(cors({
-    origin: ['http://localhost:3000', 'http://localhost:3001', 'https://ridanexpress.vercel.app', 'https://ridanexpress-hq.vercel.app'],
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH']
+  origin: ['http://localhost:3000', 'http://localhost:3001', 'https://ridanexpress.vercel.app', 'https://ridanexpress-hq.vercel.app'],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH']
 }));
 
 const io = socket(server, {
-    cors: {
-        origin: ['http://localhost:3000', 'http://localhost:3001', 'https://ridanexpress.vercel.app', 'https://ridanexpress-hq.vercel.app'],
-        credentials: true,
-        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH']
-    }
+  cors: {
+    origin: ['http://localhost:3000', 'http://localhost:3001', 'https://ridanexpress.vercel.app', 'https://ridanexpress-hq.vercel.app'],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH']
+  },
+  transports: ['websocket', 'polling']
 });
 
 app.use(express.json());
@@ -32,162 +33,173 @@ app.use(express.static(path.join(__dirname, 'client/build')));
 app.use(bodyParser.json());
 app.use(cookieParser());
 app.use('/documents', express.static(path.join(__dirname, 'public/documents')));
+app.set('io', io);
+
 
 // Store active users
-let allCustomer = []
-let allSeller = []
-let admin = {}
+let activeUsers = new Map();
 
-// Helper functions
-const addUser = (customerId, socketId, userInfo) => {
-    const checkUser = allCustomer.some(u => u.customerId === customerId)
-    if (!checkUser) {
-        allCustomer.push({
-            customerId,
-            socketId,
-            userInfo
-        })
+// Add user to active users
+const addUser = (userId, socketId, userInfo, role) => {
+  activeUsers.set(socketId, { userId, role, userInfo });
+};
+
+// Find user by ID and role
+const findUser = (userId, role) => {
+  for (let [socketId, user] of activeUsers.entries()) {
+    if (user.userId === userId && user.role === role) {
+      return { socketId, ...user };
     }
-}
+  }
+  return null;
+};
 
-const addSeller = (sellerId, socketId, userInfo) => {
-    const checkSeller = allSeller.some(u => u.sellerId === sellerId)
-    if (!checkSeller) {
-        allSeller.push({
-            sellerId,
-            socketId,
-            userInfo
-        })
-    }
-}
-
-const findCustomer = (customerId) => {
-    return allCustomer.find(c => c.customerId === customerId)
-}
-
-const findSeller = (sellerId) => {
-    return allSeller.find(c => c.sellerId === sellerId)
-}
-
+// Remove user
 const removeUser = (socketId) => {
-    allCustomer = allCustomer.filter(c => c.socketId !== socketId)
-    allSeller = allSeller.filter(c => c.socketId !== socketId)
-}
+  activeUsers.delete(socketId);
+};
 
-const removeAdmin = (socketId) => {
-    if (admin.socketId === socketId) {
-        admin = {}
+// Get all active users by role
+const getActiveUsersByRole = (role) => {
+  const users = [];
+  for (let user of activeUsers.values()) {
+    if (user.role === role) {
+      users.push(user);
     }
-}
+  }
+  return users;
+};
+
+// Helper function to create consistent chat room IDs
+const getChatRoomId = (id1, id2) => {
+  // Sort IDs to ensure consistent room naming regardless of sender/receiver order
+  const sortedIds = [id1, id2].sort();
+  return `chat_${sortedIds[0]}_${sortedIds[1]}`;
+};
 
 // Socket.io connection handler
 io.on('connection', (socket) => {
-    console.log('New socket connection:', socket.id)
+  console.log('New socket connection:', socket.id);
 
-    // User connection handlers
-    socket.on('add_user', (customerId, userInfo) => {
-        addUser(customerId, socket.id, userInfo)
-        io.emit('activeSeller', allSeller)
-        io.emit('activeCustomer', allCustomer)
-    })
+  // Add user
+  socket.on('add_user', (userId, userInfo) => {
+    addUser(userId, socket.id, userInfo, 'customer');
+    io.emit('active_sellers', getActiveUsersByRole('seller'));
+    io.emit('active_customers', getActiveUsersByRole('customer'));
+  });
 
-    socket.on('add_seller', (sellerId, userInfo) => {
-        addSeller(sellerId, socket.id, userInfo)
-        io.emit('activeSeller', allSeller)
-        io.emit('activeCustomer', allCustomer)
-        io.emit('activeAdmin', { status: true })
-    })
+  // Add seller
+  socket.on('add_seller', (sellerId, userInfo) => {
+    addUser(sellerId, socket.id, userInfo, 'seller');
+    io.emit('active_sellers', getActiveUsersByRole('seller'));
+    io.emit('active_customers', getActiveUsersByRole('customer'));
+  });
 
-    socket.on('add_admin', (adminInfo) => {
-        delete adminInfo.email
-        admin = adminInfo
-        admin.socketId = socket.id
-        io.emit('activeSeller', allSeller)
-        io.emit('activeAdmin', { status: true })
-    })
+  // Join chat room
+  socket.on('join_chat', (chatId) => {
+    socket.join(chatId);
+    console.log(`User ${socket.id} joined chat ${chatId}`);
+  });
 
-    // Message handlers
-    socket.on('send_seller_message', (msg) => {
-        const customer = findCustomer(msg.receverId)
-        if (customer !== undefined) {
-            socket.to(customer.socketId).emit('seller_message', msg)
-        }
-    })
+  // Send seller message
+  socket.on('send_seller_message', (msg) => {
+    const chatId = getChatRoomId(msg.senderId, msg.receverId);
 
-    socket.on('send_customer_message', (msg) => {
-        const seller = findSeller(msg.receverId)
-        if (seller !== undefined) {
-            socket.to(seller.socketId).emit('customer_message', {
-                ...msg,
-                seen: false // Mark as unread when first received
-            })
-        }
-    })
+    // Ensure sender is in the room
+    socket.join(chatId);
 
-    // New message seen handler
-    socket.on('mark_message_seen', (messageId, senderId) => {
-        const seller = findSeller(senderId)
-        if (seller) {
-            // Notify the customer that their message was seen
-            socket.to(seller.socketId).emit('message_seen', messageId)
-            
-            // Optionally broadcast to all connected devices of the seller
-            allSeller.filter(s => s.sellerId === senderId).forEach(s => {
-                io.to(s.socketId).emit('message_seen', messageId)
-            })
-        }
-    })
+    // Emit to both participants in the room
+    io.to(chatId).emit('receive_message', {
+      ...msg,
+      timestamp: new Date().toISOString()
+    });
+  });
 
-    // Admin message handlers
-    socket.on('send_message_admin_to_seller', msg => {
-        const seller = findSeller(msg.receverId)
-        if (seller !== undefined) {
-            socket.to(seller.socketId).emit('receved_admin_message', msg)
-        }
-    })
+  // Send customer message
+  socket.on('send_customer_message', (msg) => {
+    const chatId = getChatRoomId(msg.senderId, msg.receverId);
 
-    socket.on('send_message_seller_to_admin', msg => {
-        if (admin.socketId) {
-            socket.to(admin.socketId).emit('receved_seller_message', msg)
-        }
-    })
+    // Ensure sender is in the room
+    socket.join(chatId);
 
-    // Disconnection handler
-    socket.on('disconnect', () => {
-        console.log('User disconnected:', socket.id)
-        removeUser(socket.id)
-        removeAdmin(socket.id)
-        io.emit('activeAdmin', { status: false })
-        io.emit('activeSeller', allSeller)
-        io.emit('activeCustomer', allCustomer)
-    })
-})
+    // Emit to both participants in the room
+    io.to(chatId).emit('receive_message', {
+      ...msg,
+      timestamp: new Date().toISOString()
+    });
+  });
+
+  // Typing indicators
+  socket.on('typing_start', (data) => {
+    const chatId = getChatRoomId(data.senderId, data.receverId);
+    socket.to(chatId).emit('typing_indicator', {
+      senderId: data.senderId,
+      isTyping: true
+    });
+  });
+
+  socket.on('typing_stop', (data) => {
+    const chatId = getChatRoomId(data.senderId, data.receverId);
+    socket.to(chatId).emit('typing_indicator', {
+      senderId: data.senderId,
+      isTyping: false
+    });
+  });
+
+  // Mark message as seen
+  socket.on('mark_message_seen', (data) => {
+    const chatId = getChatRoomId(data.senderId, data.receverId);
+    socket.to(chatId).emit('message_seen', {
+      messageId: data.messageId,
+      seenBy: data.seenBy
+    });
+  });
+
+  // Handle reconnection
+  socket.on('reconnect', (attemptNumber) => {
+    console.log(`User ${socket.id} reconnected after ${attemptNumber} attempts`);
+  });
+
+  // Handle connection errors
+  socket.on('connect_error', (error) => {
+    console.error(`Connection error for ${socket.id}:`, error);
+  });
+
+  // Disconnect handler
+  socket.on('disconnect', (reason) => {
+    console.log('User disconnected:', socket.id, 'Reason:', reason);
+    removeUser(socket.id);
+    io.emit('active_sellers', getActiveUsersByRole('seller'));
+    io.emit('active_customers', getActiveUsersByRole('customer'));
+  });
+});
 
 // Routes
-app.use(bodyParser.json())
-app.use(cookieParser())
+app.use(bodyParser.json());
+app.use(cookieParser());
 
 if (process.env.NODE_ENV === 'development') {
-    console.log('Loading development test routes');
-    app.use('/api/test', require('./routes/testRoutes'));
+  console.log('Loading development test routes');
+  app.use('/api/test', require('./routes/testRoutes'));
 }
-app.use('/api', require('./routes/order/orderRoutes'))
 
-app.use('/api', require('./routes/chatRoutes'))
-app.use('/api', require('./routes/paymentRoutes'))
-app.use('/api', require('./routes/bannerRoutes'))
-app.use('/api', require('./routes/dashboard/dashboardIndexRoutes'))
-app.use('/api/home', require('./routes/home/homeRoutes'))
-app.use('/api', require('./routes/home/cardRoutes'))
-app.use('/api', require('./routes/authRoutes'))
-app.use('/api', require('./routes/home/customerAuthRoutes'))
-app.use('/api', require('./routes/dashboard/sellerRoutes'))
-app.use('/api', require('./routes/dashboard/categoryRoutes'))
-app.use('/api', require('./routes/dashboard/productRoutes'))
+app.use('/api', require('./routes/order/orderRoutes'));
+app.use('/api', require('./routes/chatRoutes'));
+app.use('/api', require('./routes/paymentRoutes'));
+app.use('/api', require('./routes/bannerRoutes'));
+app.use('/api', require('./routes/dashboard/dashboardIndexRoutes'));
+app.use('/api/home', require('./routes/home/homeRoutes'));
+app.use('/api', require('./routes/home/cardRoutes'));
+app.use('/api', require('./routes/authRoutes'));
+app.use('/api', require('./routes/home/customerAuthRoutes'));
+app.use('/api', require('./routes/dashboard/sellerRoutes'));
+app.use('/api', require('./routes/dashboard/categoryRoutes'));
+app.use('/api', require('./routes/dashboard/productRoutes'));
+app.use('/api/admin', adminRoutes);
 
-app.get('/', (req, res) => res.send('How smart do you think you are 😂, Keep trying '))
+app.get('/', (req, res) => res.send('I See you mother fucker 😡🤬'));
 
 // Start server
-const port = process.env.PORT
-dbConnect()
-server.listen(port, () => console.log(`Server is running on port ${port}!`))
+const port = process.env.PORT || 5000;
+dbConnect();
+server.listen(port, () => console.log(`Server is running on port ${port}!`));

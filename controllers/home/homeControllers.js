@@ -1,19 +1,12 @@
-const categoryModel = require('../../models/categoryModel')
-const productModel = require('../../models/productModel')
-const queryProducts = require('../../utiles/queryProducts')
-const reviewModel = require('../../models/reviewModel')
-const moment = require('moment')
-const {
-    mongo: {
-        ObjectId
-    }
-} = require('mongoose')
+const categoryModel = require('../../models/categoryModel');
+const productModel = require('../../models/productModel');
+const queryProducts = require('../../utiles/queryProducts');
+const reviewModel = require('../../models/reviewModel');
+const moment = require('moment');
+const { mongo: { ObjectId } } = require('mongoose');
+const { responseReturn } = require('../../utiles/response');
 
-const {
-    responseReturn
-} = require('../../utiles/response')
 class homeControllers {
-
     formateProduct = (products) => {
         const productArray = [];
         let i = 0;
@@ -31,12 +24,11 @@ class homeControllers {
         }
         return productArray
     }
+
     get_categorys = async (req, res) => {
         try {
             const categorys = await categoryModel.find({})
-            responseReturn(res, 200, {
-                categorys
-            })
+            responseReturn(res, 200, { categorys })
         } catch (error) {
             console.log(error.message)
         }
@@ -44,20 +36,44 @@ class homeControllers {
 
     get_products = async (req, res) => {
         try {
-            const products = await productModel.find({}).limit(16).sort({
-                createdAt: -1
-            })
-            const allProduct1 = await productModel.find({}).limit(9).sort({
-                createdAt: -1
-            })
+            // Only show approved products to customers
+            const approvedFilter = { status: 'approved' };
+
+            const products = await productModel.find(approvedFilter).limit(16).sort({ createdAt: -1 });
+
+            // Only approved products for all sections
+            const allProduct1 = await productModel.find(approvedFilter).limit(9).sort({ createdAt: -1 });
             const latest_product = this.formateProduct(allProduct1);
-            const allProduct2 = await productModel.find({}).limit(9).sort({
-                rating: -1
-            })
+
+            const allProduct2 = await productModel.find(approvedFilter).limit(9).sort({ rating: -1 });
             const topRated_product = this.formateProduct(allProduct2);
-            const allProduct3 = await productModel.find({}).limit(9).sort({
-                discount: -1
+
+            const allProduct3 = await productModel.find(approvedFilter).limit(9).sort({ discount: -1 });
+            const discount_product = this.formateProduct(allProduct3);
+
+            responseReturn(res, 200, {
+                products,
+                latest_product,
+                topRated_product,
+                discount_product
             })
+        } catch (error) {
+            console.log(error.message)
+        }
+    }
+
+    get_admin_products = async (req, res) => {
+        try {
+            // Admin can see all products regardless of status
+            const products = await productModel.find({}).limit(16).sort({ createdAt: -1 });
+
+            const allProduct1 = await productModel.find({}).limit(9).sort({ createdAt: -1 });
+            const latest_product = this.formateProduct(allProduct1);
+
+            const allProduct2 = await productModel.find({}).limit(9).sort({ rating: -1 });
+            const topRated_product = this.formateProduct(allProduct2);
+
+            const allProduct3 = await productModel.find({}).limit(9).sort({ discount: -1 });
             const discount_product = this.formateProduct(allProduct3);
 
             responseReturn(res, 200, {
@@ -72,40 +88,33 @@ class homeControllers {
     }
 
     get_product = async (req, res) => {
-        const {
-            slug
-        } = req.params
+        const { slug } = req.params;
         try {
+            // Only show approved products to customers
             const product = await productModel.findOne({
-                slug
-            })
-            const relatedProducts = await productModel.find({
-                $and: [{
-                    _id: {
-                        $ne: product.id
-                    }
-                },
-                {
-                    category: {
-                        $eq: product.category
-                    }
-                }
-                ]
-            }).limit(20)
-            const moreProducts = await productModel.find({
+                slug,
+                status: 'approved'
+            });
 
-                $and: [{
-                    _id: {
-                        $ne: product.id
-                    }
-                },
-                {
-                    sellerId: {
-                        $eq: product.sellerId
-                    }
-                }
-                ]
-            }).limit(3)
+            if (!product) {
+                return responseReturn(res, 404, { error: 'Product not found' });
+            }
+
+            // Only approved related products
+            const approvedFilter = { status: 'approved' };
+
+            const relatedProducts = await productModel.find({
+                ...approvedFilter,
+                _id: { $ne: product.id },
+                category: product.category
+            }).limit(20);
+
+            const moreProducts = await productModel.find({
+                ...approvedFilter,
+                _id: { $ne: product.id },
+                sellerId: product.sellerId
+            }).limit(3);
+
             responseReturn(res, 200, {
                 product,
                 relatedProducts,
@@ -116,23 +125,62 @@ class homeControllers {
         }
     }
 
+    get_product_by_id = async (req, res) => {
+        const { id } = req.params;
+        try {
+            // Only show approved products to customers
+            const product = await productModel.findOne({
+                _id: id,
+                status: 'approved'
+            });
+
+            if (!product) {
+                return responseReturn(res, 404, { error: 'Product not found' });
+            }
+
+            // Only approved related products
+            const approvedFilter = { status: 'approved' };
+
+            const relatedProducts = await productModel.find({
+                ...approvedFilter,
+                _id: { $ne: product.id },
+                category: product.category
+            }).limit(20);
+
+            const moreProducts = await productModel.find({
+                ...approvedFilter,
+                _id: { $ne: product.id },
+                sellerId: product.sellerId
+            }).limit(3);
+
+            responseReturn(res, 200, {
+                product,
+                relatedProducts,
+                moreProducts
+            })
+        } catch (error) {
+            console.log(error.message)
+            responseReturn(res, 500, { error: 'Server error' })
+        }
+    }
+
     price_range_product = async (req, res) => {
         try {
-            const priceRange = {
-                low: 0,
-                high: 0
-            }
-            const products = await productModel.find({}).limit(9).sort({
-                createdAt: -1
-            })
+            const priceRange = { low: 0, high: 0 };
+
+            // Only approved products
+            const approvedFilter = { status: 'approved' };
+
+            const products = await productModel.find(approvedFilter).limit(9).sort({ createdAt: -1 });
             const latest_product = this.formateProduct(products);
-            const getForPrice = await productModel.find({}).sort({
-                'price': 1
-            })
+
+            const getForPrice = await productModel.find(approvedFilter).sort({ 'price': 1 });
+
             if (getForPrice.length > 0) {
-                priceRange.high = getForPrice[getForPrice.length - 1].price
-                priceRange.low = getForPrice[0].price
+                priceRange.high = getForPrice[getForPrice.length - 1].price;
+                priceRange.low = getForPrice[0].price;
             }
+
             responseReturn(res, 200, {
                 latest_product,
                 priceRange
@@ -143,22 +191,36 @@ class homeControllers {
     }
 
     query_products = async (req, res) => {
-        const parPage = 12
-        req.query.parPage = parPage
-        try {
-            const products = await productModel.find({}).sort({
-                createdAt: -1
-            })
-            const totalProduct = new queryProducts(products, req.query).categoryQuery().searchQuery().priceQuery().ratingQuery().sortByPrice().countProducts();
+        const parPage = 12;
+        req.query.parPage = parPage;
 
-            const result = new queryProducts(products, req.query).categoryQuery().searchQuery().ratingQuery().priceQuery().sortByPrice().skip().limit().getProducts();
+        try {
+            // Only approved products
+            const products = await productModel.find({ status: 'approved' }).sort({ createdAt: -1 });
+
+            const totalProduct = new queryProducts(products, req.query)
+                .categoryQuery()
+                .searchQuery()
+                .priceQuery()
+                .ratingQuery()
+                .sortByPrice()
+                .countProducts();
+
+            const result = new queryProducts(products, req.query)
+                .categoryQuery()
+                .searchQuery()
+                .ratingQuery()
+                .priceQuery()
+                .sortByPrice()
+                .skip()
+                .limit()
+                .getProducts();
 
             responseReturn(res, 200, {
                 products: result,
                 totalProduct,
                 parPage
             })
-
         } catch (error) {
             console.log(error.message)
         }
@@ -166,64 +228,40 @@ class homeControllers {
 
     search_suggestions = async (req, res) => {
         try {
-            // 1. Get and validate query parameter
             const { query } = req.query;
-            console.log(`Search request for: "${query}"`);
-    
-            // 2. Validate minimum query length
+
+            // Return empty for short queries
             if (!query || query.trim().length < 2) {
-                return res.json({  // Changed from 400 to 200 with empty array
-                    success: true,
-                    suggestions: []
-                });
+                return res.json({ success: true, suggestions: [] });
             }
-    
-            // 3. Search with expanded fields
-            const products = await productModel.find({
-                $or: [
-                    { name: { $regex: query, $options: 'i' } },
-                    { description: { $regex: query, $options: 'i' } },
-                    { category: { $regex: query, $options: 'i' } },
-                    { tags: { $regex: query, $options: 'i' } }
-                ]
-            })
-            .select('name description category image price')
-            .sort({ rating: -1 })
-            .limit(5)
-            .lean();
-    
-            // 4. Format response to match frontend expectations
-            const suggestions = products.map(p => p.name); // Return just names
-            // OR for richer suggestions:
-            // const suggestions = products.map(p => ({
-            //     text: p.name,
-            //     category: p.category,
-            //     image: p.image
-            // }));
-    
-            res.json({
-                success: true,
-                suggestions: suggestions // Ensure this is always an array
-            });
-    
+
+            // Use MongoDB text search with index
+            const products = await productModel.find(
+                {
+                    status: 'approved',
+                    $text: { $search: query }
+                },
+                {
+                    score: { $meta: "textScore" },
+                    _id: 0,
+                    name: 1
+                }
+            )
+                .sort({ score: { $meta: "textScore" } })
+                .limit(5)
+                .lean();
+
+            const suggestions = products.map(p => p.name);
+
+            res.json({ success: true, suggestions });
         } catch (error) {
             console.error('Search error:', error);
-            res.status(500).json({
-                success: false,
-                suggestions: [], // Fallback empty array
-                error: 'Server error'
-            });
+            res.status(500).json({ success: false, suggestions: [], error: 'Server error' });
         }
     };
 
     submit_review = async (req, res) => {
-        const {
-            name,
-            rating,
-            review,
-            productId
-        } = req.body
-        console.log(req.body)
+        const { name, rating, review, productId } = req.body;
         try {
             await reviewModel.create({
                 productId,
@@ -231,114 +269,84 @@ class homeControllers {
                 rating,
                 review,
                 date: moment(Date.now()).format('LL')
-            })
+            });
 
             let rat = 0;
-            const reviews = await reviewModel.find({
-                productId
-            });
+            const reviews = await reviewModel.find({ productId });
             for (let i = 0; i < reviews.length; i++) {
-                rat = rat + reviews[i].rating
+                rat = rat + reviews[i].rating;
             }
-            let productRating = 0;
 
+            let productRating = 0;
             if (reviews.length !== 0) {
-                productRating = (rat / reviews.length).toFixed(1)
+                productRating = (rat / reviews.length).toFixed(1);
             }
 
             await productModel.findByIdAndUpdate(productId, {
                 rating: productRating
-            })
+            });
 
-            responseReturn(res, 201, {
-                message: "Review Success"
-            })
+            responseReturn(res, 201, { message: "Review Success" });
         } catch (error) {
-            console.log(error)
+            console.log(error);
+            responseReturn(res, 500, { error: 'Failed to submit review' });
         }
     }
 
     get_reviews = async (req, res) => {
-        const {
-            productId
-        } = req.params
-        let {
-            pageNo
-        } = req.query
-        pageNo = parseInt(pageNo)
-        const limit = 5
-        const skipPage = limit * (pageNo - 1)
+        const { productId } = req.params;
+        let { pageNo } = req.query;
+        pageNo = parseInt(pageNo);
+        const limit = 5;
+        const skipPage = limit * (pageNo - 1);
+
         try {
-            let getRating = await reviewModel.aggregate([{
-                $match: {
-                    productId: {
-                        $eq: new ObjectId(productId)
-                    },
-                    rating: {
-                        $not: {
-                            $size: 0
-                        }
+            let getRating = await reviewModel.aggregate([
+                {
+                    $match: {
+                        productId: { $eq: new ObjectId(productId) },
+                        rating: { $exists: true, $ne: null }
+                    }
+                },
+                {
+                    $group: {
+                        _id: "$rating",
+                        count: { $sum: 1 }
                     }
                 }
-            },
-            {
-                $unwind: "$rating"
-            },
-            {
-                $group: {
-                    _id: "$rating",
-                    count: {
-                        $sum: 1
-                    }
-                }
-            }
-            ])
-            let rating_review = [{
-                rating: 5,
-                sum: 0
-            },
-            {
-                rating: 4,
-                sum: 0
-            },
-            {
-                rating: 3,
-                sum: 0
-            },
-            {
-                rating: 2,
-                sum: 0
-            },
-            {
-                rating: 1,
-                sum: 0
-            }
-            ]
+            ]);
+
+            let rating_review = [
+                { rating: 5, sum: 0 },
+                { rating: 4, sum: 0 },
+                { rating: 3, sum: 0 },
+                { rating: 2, sum: 0 },
+                { rating: 1, sum: 0 }
+            ];
+
             for (let i = 0; i < rating_review.length; i++) {
-                for (let j = 0; j < getRating.length; j++) {
-                    if (rating_review[i].rating === getRating[j]._id) {
-                        rating_review[i].sum = getRating[j].count
-                        break
-                    }
+                const found = getRating.find(r => r._id === rating_review[i].rating);
+                if (found) {
+                    rating_review[i].sum = found.count;
                 }
             }
-            const getAll = await reviewModel.find({
-                productId
-            })
-            const reviews = await reviewModel.find({
-                productId
-            }).skip(skipPage).limit(limit).sort({
-                createdAt: -1
-            })
+
+            const getAll = await reviewModel.find({ productId });
+            const reviews = await reviewModel.find({ productId })
+                .skip(skipPage)
+                .limit(limit)
+                .sort({ createdAt: -1 });
+
             responseReturn(res, 200, {
                 reviews,
                 totalReview: getAll.length,
                 rating_review
-            })
+            });
         } catch (error) {
-            console.log(error)
+            console.log(error);
+            responseReturn(res, 500, { error: 'Failed to get reviews' });
         }
     }
 }
 
-module.exports = new homeControllers()
+module.exports = new homeControllers();

@@ -260,37 +260,115 @@ class orderController {
     }
 
 
-    // // Clear cart items
-    // const cartIds = products.flatMap(seller =>
-    //     seller.products.map(item => item._id).filter(Boolean)
-    // );
-    // if (cartIds.length > 0) {
-    //     await cardModel.deleteMany({ _id: { $in: cartIds } }).session(session);
-    // }
+    async calculate_kwik_fee(req, res) {
+        const { pickup, delivery, weight } = req.body;
+        try {
+            const fee = await calculateKwikFee(pickup, delivery, weight);
+            responseReturn(res, 200, { fee });
+        } catch (error) {
+            responseReturn(res, 400, { error: error.message });
+        }
+    }
 
-    // // Set payment timeout
-    // this.paymentTimeouts.set(
-    //     order._id.toString(),
-    //     setTimeout(async () => {
-    //         const session = await mongoose.startSession();
-    //         try {
-    //             await session.withTransaction(async () => {
-    //                 await customerOrder.findByIdAndUpdate(
-    //                     order._id,
-    //                     { $set: { payment_status: 'failed', delivery_status: 'cancelled' } },
-    //                     { session }
-    //                 );
-    //                 await authOrderModel.updateMany(
-    //                     { orderId: order._id },
-    //                     { $set: { delivery_status: 'cancelled' } },
-    //                     { session }
-    //                 );
-    //             });
-    //         } finally {
-    //             session.endSession();
-    //         }
-    //     }, this.paymentTimeout)
-    // );
+    async accept_order_with_kwik(req, res) {
+        const session = await mongoose.startSession();
+        const { orderId } = req.params;
+        const { weight, pickupAddress } = req.body;
+        const sellerId = req.id; // Assuming sellerId is set in auth middleware
+
+        try {
+            await session.withTransaction(async () => {
+                const order = await authOrderModel.findById(orderId).session(session);
+                if (!order) throw new Error('Order not found');
+
+                // Get recipient info
+                const recipientName = order.shippingInfo?.name || 'Customer';
+                const recipientPhone = order.shippingInfo?.phone || '';
+
+                // Create Kwik order
+                const kwikResponse = await createKwikOrder({
+                    orderId: order._id,
+                    pickup_address: pickupAddress,
+                    delivery_address: order.shippingInfo.address,
+                    weight,
+                    recipient_name: recipientName,
+                    recipient_phone: recipientPhone
+                });
+
+                // Update order
+                order.delivery = {
+                    provider: 'kwik',
+                    kwikOrderId: kwikResponse.id,
+                    trackingUrl: kwikResponse.tracking_url,
+                    status: 'pending',
+                    fee: kwikResponse.delivery_fee
+                };
+                order.delivery_status = 'accepted';
+                await order.save({ session });
+            });
+
+            responseReturn(res, 200, { message: 'Order accepted. Kwik rider dispatched' });
+        } catch (error) {
+            responseReturn(res, 500, { error: error.message });
+        } finally {
+            session.endSession();
+        }
+    }
+
+    async track_delivery(req, res) {
+        try {
+            const order = await authOrderModel.findById(req.params.orderId);
+            if (!order.delivery?.kwikOrderId) {
+                throw new Error('No Kwik delivery associated');
+            }
+
+            const trackingInfo = await trackKwikOrder(order.delivery.kwikOrderId);
+            responseReturn(res, 200, trackingInfo);
+        } catch (error) {
+            responseReturn(res, 500, { error: error.message });
+        }
+    }
+
+    async kwik_webhook(req, res) {
+        try {
+            console.log('Received Kwik webhook:', req.body);
+            const { event, data } = req.body;
+            const status = handleKwikWebhook({ event, data });
+
+            if (!status) return res.status(200).send('Ignored');
+
+            // Find and update order
+            const order = await authOrderModel.findOne({
+                'delivery.kwikOrderId': data.id
+            });
+
+            if (order) {
+                order.delivery.status = status;
+
+                // Add rider info if available
+                if (data.rider) {
+                    order.delivery.rider = {
+                        name: data.rider.name,
+                        phone: data.rider.phone
+                    };
+                }
+
+                // Update delivery status when picked up
+                if (status === 'picked_up') {
+                    order.delivery_status = 'in_transit';
+                }
+
+                await order.save();
+                console.log(`Updated order ${order._id} to status: ${status}`);
+            }
+
+            res.status(200).send('OK');
+        } catch (error) {
+            console.error('Webhook processing error:', error);
+            res.status(500).json({ error: error.message });
+        }
+    }
+
 
     async get_customer_databorad_data(req, res) {
         const { userId } = req.params;

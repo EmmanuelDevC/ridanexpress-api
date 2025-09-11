@@ -1,5 +1,7 @@
 const router = require('express').Router()
 const orderController = require('../../controllers/order/orderController')
+const { sellerAuth } = require('../../middlewares/authMiddleware')
+
 
 // ---- customer
 router.post('/home/order/place-order', orderController.place_order)
@@ -19,5 +21,11 @@ router.put('/admin/order-status/update/:orderId', orderController.admin_order_st
 router.get('/seller/orders/:sellerId', orderController.get_seller_orders)
 router.get('/seller/order/:orderId', orderController.get_seller_order)
 router.put('/seller/order-status/update/:orderId', orderController.seller_order_status_update)
+
+// ===== NEW KWIK ROUTES =====
+router.post('/seller/calculate-kwik-fee', sellerAuth, orderController.calculate_kwik_fee)
+router.put('/seller/accept-with-kwik/:orderId', sellerAuth, orderController.accept_order_with_kwik)
+router.get('/seller/track-delivery/:orderId', sellerAuth, orderController.track_delivery)
+router.post('/webhooks/kwik', orderController.kwik_webhook)
 
 module.exports = router

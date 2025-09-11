@@ -2,10 +2,139 @@ const mongoose = require('mongoose');
 const sellerModel = require('../../models/sellerModel');
 const Product = require('../../models/productModel');
 const { responseReturn } = require('../../utiles/response');
+const AutoReplyConfig = require('../../models/autoReplyConfigModel')
 
 class sellerController {
     // Validate MongoDB ID format
     validateObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
+
+    // Function to handle auto-reply logic
+    handleAutoReply = async (senderId, receiverId, message, senderName) => {
+        try {
+            // Get the seller's auto-reply config
+            const config = await AutoReplyConfig.findOne({ sellerId: receiverId });
+
+            if (!config || !config.isActive) {
+                return null; // Auto-reply not enabled
+            }
+
+            let replyMessage = '';
+
+            // Check if this is the first message in the conversation
+            const messageCount = await sellerCustomerMessage.countDocuments({
+                $or: [
+                    { senderId, receverId: receiverId },
+                    { senderId: receiverId, receverId: senderId }
+                ]
+            });
+
+            // If it's the first message, send welcome message (regardless of online status)
+            if (messageCount === 0) {
+                replyMessage = config.welcomeMessage;
+            }
+            // Check if the seller is offline (not in activeUsers)
+            else if (!isSellerOnline(receiverId)) {
+                replyMessage = config.offlineMessage;
+            }
+            // Check if it's an order inquiry (only when seller is online)
+            else if (isOrderInquiry(message)) {
+                replyMessage = config.orderInquiryResponse;
+
+                // Replace [link] with actual tracking link if available
+                const order = await getCustomerOrder(senderId);
+                if (order && order.trackingLink) {
+                    replyMessage = replyMessage.replace('[link]', order.trackingLink);
+                } else {
+                    replyMessage = replyMessage.replace('[link]', 'your order details');
+                }
+            }
+
+            if (replyMessage) {
+                // Create and save the auto-reply message
+                const autoReply = new sellerCustomerMessage({
+                    senderName: "Auto-Reply System",
+                    senderId: receiverId,
+                    receverId: senderId,
+                    message: replyMessage,
+                    type: 'text',
+                    status: 'seen', // Auto-replies are automatically marked as seen
+                    isAutoReply: true
+                });
+
+                await autoReply.save();
+                return autoReply;
+            }
+
+            return null;
+        } catch (error) {
+            console.error('Error in auto-reply:', error);
+            return null;
+        }
+    };
+
+    // Helper function to check if seller is online
+    isSellerOnline = (sellerId) => {
+        // This should check your activeUsers map in server.js
+        // You'll need to pass the io instance or find another way to access activeUsers
+        for (let [socketId, user] of activeUsers.entries()) {
+            if (user.userId === sellerId && user.role === 'seller') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // In getAutoReplyConfig method:
+    getAutoReplyConfig = async (req, res) => {
+        try {
+            const { sellerId } = req.params;
+            const config = await AutoReplyConfig.findOne({ sellerId });
+
+            if (!config) {
+                return res.status(200).json({
+                    offlineMessage: "Thanks for your message! We're currently offline and will respond as soon as possible.",
+                    welcomeMessage: "Hello! Thanks for reaching out. How can I help you today?",
+                    orderInquiryResponse: "Your order is being processed and will ship soon.",
+                    isActive: false
+                });
+            }
+
+            res.status(200).json(config); // Directly return the config object
+        } catch (error) {
+            console.error(error);
+            res.status(500).json({ message: 'Error fetching auto-reply config' });
+        }
+    };
+
+    // In saveAutoReplyConfig method:
+    saveAutoReplyConfig = async (req, res) => {
+        try {
+            const { sellerId, offlineMessage, welcomeMessage, orderInquiryResponse, isActive } = req.body;
+
+            let config = await AutoReplyConfig.findOne({ sellerId });
+
+            if (!config) {
+                config = new AutoReplyConfig({
+                    sellerId,
+                    offlineMessage,
+                    welcomeMessage,
+                    orderInquiryResponse,
+                    isActive
+                });
+            } else {
+                config.offlineMessage = offlineMessage;
+                config.welcomeMessage = welcomeMessage;
+                config.orderInquiryResponse = orderInquiryResponse;
+                config.isActive = isActive;
+            }
+
+            await config.save();
+            res.status(200).json({ message: 'Auto-reply settings saved successfully' });
+        } catch (error) {
+            console.error(error);
+            res.status(500).json({ message: 'Error saving auto-reply config' });
+        }
+    };
 
     // Get seller requests
     get_seller_request = async (req, res) => {

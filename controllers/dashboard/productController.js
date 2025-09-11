@@ -2,6 +2,8 @@ const formidable = require('formidable')
 const cloudinary = require('cloudinary').v2
 const productModel = require('../../models/productModel');
 const { responseReturn } = require('../../utiles/response');
+
+
 class productController {
 
     add_product = async (req, res) => {
@@ -42,16 +44,64 @@ class productController {
                     price: parseInt(price),
                     discount: parseInt(discount),
                     images: allImageUrl,
-                    brand: brand.trim()
+                    brand: brand.trim(),
+                    status: 'pending' // Set initial status to pending
 
                 })
-                responseReturn(res, 201, { message: "product add success" })
+                responseReturn(res, 201, { message: "Product submitted for admin approval" })
             } catch (error) {
                 responseReturn(res, 500, { error: error.message })
             }
 
         })
     }
+
+    get_pending_products = async (req, res) => {
+        const { page, parPage } = req.query;
+        const skipPage = parseInt(parPage) * (parseInt(page) - 1);
+
+        try {
+            const products = await productModel.find({ status: 'pending' })
+                .populate('sellerId', 'shopName email')
+                .skip(skipPage)
+                .limit(parseInt(parPage))
+                .sort({ createdAt: -1 });
+
+            const totalProducts = await productModel.countDocuments({ status: 'pending' });
+            responseReturn(res, 200, { totalProducts, products });
+        } catch (error) {
+            console.error('Error fetching pending products:', error);
+            responseReturn(res, 500, { error: 'Server error' });
+        }
+    }
+
+    approve_product = async (req, res) => {
+        const { productId } = req.params;
+
+        try {
+            await productModel.findByIdAndUpdate(productId, { status: 'approved' });
+            responseReturn(res, 200, { message: 'Product approved successfully' });
+        } catch (error) {
+            responseReturn(res, 500, { error: error.message });
+        }
+    }
+
+    reject_product = async (req, res) => {
+        const { productId } = req.params;
+        const { reason } = req.body;
+
+        try {
+            await productModel.findByIdAndUpdate(productId, {
+                status: 'rejected',
+                rejectionReason: reason
+            });
+            responseReturn(res, 200, { message: 'Product rejected successfully' });
+        } catch (error) {
+            responseReturn(res, 500, { error: error.message });
+        }
+    }
+
+
     products_get = async (req, res) => {
         const { page, searchValue, parPage } = req.query
         const { id } = req;
@@ -62,16 +112,24 @@ class productController {
             if (searchValue) {
                 const products = await productModel.find({
                     $text: { $search: searchValue },
-                    sellerId: id
+                    sellerId: id,
+                    status: { $in: ['pending', 'approved', 'rejected'] } // Show all statuses to seller
                 }).skip(skipPage).limit(parPage).sort({ createdAt: -1 })
                 const totalProduct = await productModel.find({
                     $text: { $search: searchValue },
-                    sellerId: id
+                    sellerId: id,
+                    status: { $in: ['pending', 'approved', 'rejected'] }
                 }).countDocuments()
                 responseReturn(res, 200, { totalProduct, products })
             } else {
-                const products = await productModel.find({ sellerId: id }).skip(skipPage).limit(parPage).sort({ createdAt: -1 })
-                const totalProduct = await productModel.find({ sellerId: id }).countDocuments()
+                const products = await productModel.find({
+                    sellerId: id,
+                    status: { $in: ['pending', 'approved', 'rejected'] }
+                }).skip(skipPage).limit(parPage).sort({ createdAt: -1 })
+                const totalProduct = await productModel.find({
+                    sellerId: id,
+                    status: { $in: ['pending', 'approved', 'rejected'] }
+                }).countDocuments()
                 responseReturn(res, 200, { totalProduct, products })
             }
         } catch (error) {
@@ -93,10 +151,18 @@ class productController {
         name = name.trim()
         name = name.replace(/[^a-zA-Z0-9\s-]/g, '')
         const slug = name.split(' ').join('-')
-        
+
         try {
             await productModel.findByIdAndUpdate(productId, {
-                name, description, discount, price, brand, productId, stock, slug
+                name,
+                description,
+                discount,
+                price,
+                brand,
+                productId,
+                stock,
+                slug,
+                status: 'pending' // Reset status to pending on update
             })
             const product = await productModel.findById(productId)
             responseReturn(res, 200, { product, message: 'product update success' })
