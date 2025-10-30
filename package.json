@@ -11,6 +11,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@googlemaps/google-maps-services-js": "^3.4.2",
+    "@mapbox/mapbox-sdk": "^0.16.2",
     "@sendgrid/mail": "^8.1.4",
     "@sendinblue/client": "^3.3.1",
     "axios": "^1.9.0",

@@ -49,7 +49,24 @@ const productSchema = new Schema({
         type: Number,
         default: 0
     },
-    // Add admin approval fields
+    weight: {
+        type: Number, // in kg
+        required: true
+    },
+    length: {
+        type: Number, // in cm
+        required: true
+    },
+    width: {
+        type: Number, // in cm
+        required: true
+    },
+    height: {
+        type: Number, // in cm
+        required: true
+    },
+
+
     status: {
         type: String,
         enum: ['pending', 'approved', 'rejected'],

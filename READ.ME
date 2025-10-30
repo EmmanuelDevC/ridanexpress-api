@@ -1,0 +1,28 @@
+<!-- Shipping Routes (/api/shipping/*)
+GET /shipping/vehicles - Get vehicle options -->
+
+GET /shipping/loaders - Get loader options
+
+POST /shipping/calculate - Calculate shipping for multiple sellers
+
+POST /shipping/calculate-single - Calculate single shipping
+
+POST /shipping/validate-address - Validate address
+
+GET /shipping/availability - Check service availability
+
+POST /shipping/rates - Get shipping rates
+
+
+<!-- Order Routes (/api/order/*)
+PUT /seller/accept-with-kwik/:orderId - Accept order with Kwik delivery -->
+
+
+GET /seller/track-delivery/:orderId - Track delivery status
+
+DELETE /orders/:orderId/kwik - Cancel Kwik delivery
+
+POST /kwik/webhook - Kwik webhook handler
+
+GET /test-kwik - Test Kwik integration
+

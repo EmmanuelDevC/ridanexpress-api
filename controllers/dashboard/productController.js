@@ -3,20 +3,36 @@ const cloudinary = require('cloudinary').v2
 const productModel = require('../../models/productModel');
 const { responseReturn } = require('../../utiles/response');
 
-
 class productController {
-
     add_product = async (req, res) => {
         const { id } = req;
         const form = formidable({ multiples: true })
 
         form.parse(req, async (err, field, files) => {
-            let { name, category, description, stock, price, discount, shopName, brand } = field;
+            let {
+                name,
+                category,
+                description,
+                stock,
+                price,
+                discount,
+                shopName,
+                brand,
+                weight,
+                length,
+                width,
+                height
+            } = field;
+
+            weight = Array.isArray(weight) ? weight[0] : weight;
+            length = Array.isArray(length) ? length[0] : length;
+            width = Array.isArray(width) ? width[0] : width;
+            height = Array.isArray(height) ? height[0] : height;
+            
             const { images } = files;
             name = name.trim()
             name = name.replace(/[^a-zA-Z0-9\s-]/g, '')
             const slug = name.split(' ').join('-')
-
 
             cloudinary.config({
                 cloud_name: process.env.cloud_name,
@@ -40,19 +56,21 @@ class productController {
                     shopName,
                     category: category.trim(),
                     description: description.trim(),
-                    stock: parseInt(stock),
-                    price: parseInt(price),
-                    discount: parseInt(discount),
+                    stock: parseInt(stock) || 0,
+                    price: parseInt(price) || 0,
+                    discount: parseInt(discount) || 0,
                     images: allImageUrl,
                     brand: brand.trim(),
-                    status: 'pending' // Set initial status to pending
-
+                    status: 'pending',
+                    weight: weight ? parseFloat(weight) : 0,
+                    length: length ? parseFloat(length) : 0,
+                    width: width ? parseFloat(width) : 0,
+                    height: height ? parseFloat(height) : 0
                 })
-                responseReturn(res, 201, { message: "Product submitted for admin approval" })
+                responseReturn(res, 201, { message: "Product submitted for Ridan approval" })
             } catch (error) {
                 responseReturn(res, 500, { error: error.message })
             }
-
         })
     }
 
@@ -101,7 +119,6 @@ class productController {
         }
     }
 
-
     products_get = async (req, res) => {
         const { page, searchValue, parPage } = req.query
         const { id } = req;
@@ -113,7 +130,7 @@ class productController {
                 const products = await productModel.find({
                     $text: { $search: searchValue },
                     sellerId: id,
-                    status: { $in: ['pending', 'approved', 'rejected'] } // Show all statuses to seller
+                    status: { $in: ['pending', 'approved', 'rejected'] }
                 }).skip(skipPage).limit(parPage).sort({ createdAt: -1 })
                 const totalProduct = await productModel.find({
                     $text: { $search: searchValue },
@@ -146,8 +163,9 @@ class productController {
             console.log(error.message)
         }
     }
+
     product_update = async (req, res) => {
-        let { name, description, discount, price, brand, productId, stock } = req.body;
+        let { name, description, discount, price, brand, productId, stock, weight, length, width, height } = req.body;
         name = name.trim()
         name = name.replace(/[^a-zA-Z0-9\s-]/g, '')
         const slug = name.split(' ').join('-')
@@ -156,13 +174,16 @@ class productController {
             await productModel.findByIdAndUpdate(productId, {
                 name,
                 description,
-                discount,
-                price,
+                discount: parseInt(discount),
+                price: parseInt(price),
                 brand,
-                productId,
-                stock,
+                stock: parseInt(stock),
                 slug,
-                status: 'pending' // Reset status to pending on update
+                weight: parseFloat(weight),
+                length: parseFloat(length),
+                width: parseFloat(width),
+                height: parseFloat(height),
+                status: 'pending'
             })
             const product = await productModel.findById(productId)
             responseReturn(res, 200, { product, message: 'product update success' })
@@ -170,6 +191,7 @@ class productController {
             responseReturn(res, 500, { error: error.message })
         }
     }
+
     product_image_update = async (req, res) => {
         const form = formidable({ multiples: true })
 

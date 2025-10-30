@@ -183,6 +183,10 @@ if (process.env.NODE_ENV === 'development') {
   app.use('/api/test', require('./routes/testRoutes'));
 }
 
+const shippingRoutes = require('./routes/shippingRoutes');
+app.use('/api', shippingRoutes);
+app.use('/api/webhooks/kwik', require('./routes/webhookRoutes'));
+
 app.use('/api', require('./routes/order/orderRoutes'));
 app.use('/api', require('./routes/chatRoutes'));
 app.use('/api', require('./routes/paymentRoutes'));
@@ -197,7 +201,7 @@ app.use('/api', require('./routes/dashboard/categoryRoutes'));
 app.use('/api', require('./routes/dashboard/productRoutes'));
 app.use('/api/admin', adminRoutes);
 
-app.get('/', (req, res) => res.send('I See you mother fucker 😡🤬'));
+app.get('/', (req, res) => res.send('I See you mother fucker '));
 
 // Start server
 const port = process.env.PORT || 5000;

@@ -10,7 +10,7 @@ const { createToken } = require('../utiles/tokenCreate');
 const fs = require('fs').promises;
 const FormData = require('form-data');
 const AuditLog = require('../models/auditLogModel');
-const jwt = require('jsonwebtoken'); // Added missing jwt import
+const jwt = require('jsonwebtoken');
 
 // Configure Cloudinary
 cloudinary.config({
@@ -22,20 +22,17 @@ cloudinary.config({
 
 class authControllers {
 
-    // ======== ADDED MISSING METHOD ========
     logAction = async (req, action, entityType, entityId, details) => {
         try {
             await AuditLog.create({
-                action,
-                entityType,
-                entityId,
-                details,
-                user: {
-                    id: req.id,
-                    role: req.role
-                },
-                ipAddress: req.ip,
-                userAgent: req.headers['user-agent'],
+                userId: req.id,                    // Required: ObjectId
+                userType: req.role,                // Required: must be 'admin', 'seller', or 'system'
+                action: action,                    // Required: string
+                entityType: entityType,            // Required: must be from enum
+                entityId: entityId,                // Optional: ObjectId
+                details: details,                  // Optional: mixed data
+                ipAddress: req.ip || 'unknown',    // Required: string
+                userAgent: req.headers['user-agent'] || 'unknown',
                 timestamp: new Date()
             });
         } catch (error) {
@@ -52,8 +49,6 @@ class authControllers {
 
         try {
             const payload = jwt.verify(refreshToken, process.env.REFRESH_SECRET);
-
-            // Create new access token
             const accessToken = jwt.sign(
                 {
                     sub: payload.sub,
@@ -105,12 +100,11 @@ class authControllers {
             if (admin) {
                 const match = await bcrpty.compare(password, admin.password);
                 if (match) {
-                    const token = await createToken({
+                    const token = createToken({
                         id: admin.id,
                         role: admin.role
                     });
 
-                    // Create sanitized user info
                     const userInfo = {
                         _id: admin._id,
                         name: admin.name,
@@ -124,7 +118,6 @@ class authControllers {
                         expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
                     });
 
-                    // Return userInfo in response
                     responseReturn(res, 200, {
                         token,
                         message: 'Login success',
@@ -148,13 +141,13 @@ class authControllers {
             if (seller) {
                 const match = await bcrpty.compare(password, seller.password);
                 if (match) {
-                    const token = await createToken({
+                    const token = createToken({
                         id: seller.id,
                         role: seller.role,
-                        status: seller.status // Include status in token
+                        status: seller.status
                     });
 
-                    // Create sanitized user info
+                    // Create sanitized user info with location
                     const userInfo = {
                         _id: seller._id,
                         name: seller.name,
@@ -162,9 +155,18 @@ class authControllers {
                         role: seller.role,
                         status: seller.status,
                         image: seller.image || '',
+                        location: seller.location || {},
                         shopInfo: {
                             shopName: seller.shopInfo?.shopName || '',
-                            businessType: seller.shopInfo?.businessType || ''
+                            businessType: seller.shopInfo?.businessType || '',
+                            division: seller.shopInfo?.division || '',
+                            district: seller.shopInfo?.district || '',
+                            sub_district: seller.shopInfo?.sub_district || '',
+                            cacNumber: seller.shopInfo?.cacNumber || '',
+                            tin: seller.shopInfo?.tin || '',
+                            businessNumber: seller.shopInfo?.businessNumber || '',
+                            document: seller.shopInfo?.document || '',
+                            documentVerification: seller.shopInfo?.documentVerification || {}
                         }
                     };
 
@@ -172,7 +174,6 @@ class authControllers {
                         expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
                     });
 
-                    // Return userInfo in response
                     responseReturn(res, 200, {
                         token,
                         message: 'Login success',
@@ -192,80 +193,139 @@ class authControllers {
     seller_register = async (req, res) => {
         const { email, name, password } = req.body;
         try {
+            console.log('Registration attempt for:', { email, name });
+
             const getUser = await sellerModel.findOne({ email });
             if (getUser) {
-                responseReturn(res, 404, { error: 'Email already exists' });
-            } else {
-                const seller = await sellerModel.create({
-                    name,
-                    email,
-                    password: await bcrpty.hash(password, 10),
-                    method: 'manually',
-                    status: 'pending',
-                    security: { // Initialize security field
-                        documentUploadCount: 0,
-                        lastDocumentUpload: null,
-                        verificationHistory: []
+                return responseReturn(res, 409, { error: 'Email already exists' });
+            }
+
+            // Create seller with PROPER GEOJSON coordinates
+            const seller = await sellerModel.create({
+                name: name.trim(),
+                email: email.toLowerCase().trim(),
+                password: await bcrpty.hash(password, 10),
+                role: 'seller',
+                method: 'manually',
+                status: 'pending',
+                security: {
+                    documentUploadCount: 0,
+                    lastDocumentUpload: null,
+                    verificationHistory: []
+                },
+                location: {
+                    address: '',
+                    city: '',
+                    state: '',
+                    country: 'Nigeria',
+                    businessNumber: '',
+                    coordinates: {
+                        type: "Point",
+                        coordinates: [0, 0] // Default coordinates [lng, lat]
                     },
-                    shopInfo: {
-                        shopName: '',
-                        division: '',
-                        district: '',
-                        sub_district: '',
-                        businessType: 'small',
-                        cacNumber: '',
-                        companyName: '',
-                        companyEmail: '',
-                        tin: '',
-                        postalCode: '',
-                        documentType: '',
-                        document: '',
-                        id_number: '',
-                        documentVerification: {
-                            status: 'pending',
-                            checks: [],
-                            issues: []
-                        }
+                    geocodingSource: 'manual'
+                },
+                shopInfo: {
+                    shopName: '',
+                    division: '',
+                    district: '',
+                    sub_district: '',
+                    businessType: 'small',
+                    cacNumber: '',
+                    companyName: '',
+                    companyEmail: '',
+                    tin: '',
+                    businessNumber: '',
+                    documentType: '',
+                    document: '',
+                    id_number: '',
+                    documentVerification: {
+                        status: 'pending',
+                        checks: [],
+                        issues: []
                     }
-                });
-                await sellerCustomerModel.create({
-                    myId: seller.id
-                });
-                const token = await createToken({
-                    id: seller.id,
-                    role: seller.role,
-                    status: seller.status
-                });
+                }
+            });
 
-                // Create sanitized user info
-                const userInfo = {
-                    _id: seller._id,
-                    name: seller.name,
-                    email: seller.email,
-                    role: seller.role,
-                    status: seller.status,
-                    image: seller.image || '',
-                    shopInfo: {
-                        shopName: seller.shopInfo?.shopName || '',
-                        businessType: seller.shopInfo?.businessType || ''
-                    }
-                };
+            console.log('Seller created with ID:', seller._id);
 
-                res.cookie('accessToken', token, {
-                    expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-                });
+            // Create seller customer model
+            await sellerCustomerModel.create({
+                myId: seller._id
+            });
 
-                // Return userInfo in response
-                responseReturn(res, 201, {
-                    token,
-                    message: 'Register success',
-                    userInfo
+            // Create token
+            const token = createToken({
+                id: seller._id.toString(),
+                role: seller.role,
+                status: seller.status
+            });
+
+            if (!token) {
+                throw new Error('Token creation failed');
+            }
+
+            console.log('Token created successfully');
+
+            // Prepare user info
+            const userInfo = {
+                _id: seller._id,
+                name: seller.name,
+                email: seller.email,
+                role: seller.role,
+                status: seller.status,
+                image: seller.image || '',
+                location: seller.location || {},
+                shopInfo: {
+                    shopName: seller.shopInfo?.shopName || '',
+                    businessType: seller.shopInfo?.businessType || ''
+                }
+            };
+
+            // Set cookie
+            res.cookie('accessToken', token, {
+                expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                sameSite: 'lax'
+            });
+
+            // Log the registration
+            await this.logAction(
+                req,
+                'SELLER_REGISTER',
+                'seller',
+                seller._id,
+                { email: seller.email, status: seller.status }
+            );
+
+            console.log('Registration successful for:', seller.email);
+
+            responseReturn(res, 201, {
+                token,
+                message: 'Registration successful',
+                userInfo
+            });
+
+        } catch (error) {
+            console.error('Registration error:', error);
+
+            // Specific error handling
+            if (error.name === 'ValidationError') {
+                return responseReturn(res, 400, {
+                    error: 'Validation failed: ' + Object.values(error.errors).map(e => e.message).join(', ')
                 });
             }
-        } catch (error) {
-            responseReturn(res, 500, { error: 'Internal server error' });
-        }
+            if (error.code === 11000) {
+                return responseReturn(res, 409, {
+                    error: 'Email already exists'
+                });
+            }
 
+            responseReturn(res, 500, {
+                error: 'Registration failed. Please try again.'
+            });
+        }
     }
 
     getUser = async (req, res) => {
@@ -273,7 +333,6 @@ class authControllers {
         try {
             if (role === 'admin') {
                 const user = await adminModel.findById(id);
-                // Return consistent userInfo structure
                 responseReturn(res, 200, {
                     userInfo: {
                         _id: user._id,
@@ -286,7 +345,7 @@ class authControllers {
                 });
             } else {
                 const seller = await sellerModel.findById(id);
-                // Return consistent userInfo structure
+                // Return complete user info including location
                 responseReturn(res, 200, {
                     userInfo: {
                         _id: seller._id,
@@ -295,9 +354,18 @@ class authControllers {
                         role: seller.role,
                         status: seller.status,
                         image: seller.image || '',
+                        location: seller.location || {},
                         shopInfo: {
                             shopName: seller.shopInfo?.shopName || '',
-                            businessType: seller.shopInfo?.businessType || ''
+                            businessType: seller.shopInfo?.businessType || '',
+                            division: seller.shopInfo?.division || '',
+                            district: seller.shopInfo?.district || '',
+                            sub_district: seller.shopInfo?.sub_district || '',
+                            cacNumber: seller.shopInfo?.cacNumber || '',
+                            tin: seller.shopInfo?.tin || '',
+                            businessNumber: seller.shopInfo?.businessNumber || '',
+                            document: seller.shopInfo?.document || '',
+                            documentVerification: seller.shopInfo?.documentVerification || {}
                         }
                     }
                 });
@@ -326,7 +394,6 @@ class authControllers {
                     await sellerModel.findByIdAndUpdate(id, { image: result.url });
                     const seller = await sellerModel.findById(id);
 
-                    // Return consistent userInfo structure
                     const userInfo = {
                         _id: seller._id,
                         name: seller.name,
@@ -334,6 +401,7 @@ class authControllers {
                         role: seller.role,
                         status: seller.status,
                         image: seller.image || '',
+                        location: seller.location || {},
                         shopInfo: {
                             shopName: seller.shopInfo?.shopName || '',
                             businessType: seller.shopInfo?.businessType || ''
@@ -359,7 +427,18 @@ class authControllers {
                     return responseReturn(res, 400, { error: err.message });
                 }
 
-                // Get seller with security initialization
+                console.log('Received fields:', {
+                    shopName: fields.shopName,
+                    division: fields.division,
+                    district: fields.district,
+                    sub_district: fields.sub_district,
+                    latitude: fields.latitude,
+                    longitude: fields.longitude,
+                    geocodingSource: fields.geocodingSource,
+                    formattedAddress: fields.formattedAddress
+                });
+
+                // Get seller
                 let seller = await sellerModel.findById(req.id);
                 if (!seller) {
                     return responseReturn(res, 404, { error: 'Seller not found' });
@@ -372,54 +451,9 @@ class authControllers {
                         lastDocumentUpload: null,
                         verificationHistory: []
                     };
-                    await seller.save();
                 }
 
-                // File validation
-                if (files.document) {
-                    // File type validation
-                    const allowedMimes = ['image/jpeg', 'image/png', 'application/pdf'];
-                    if (!allowedMimes.includes(files.document.mimetype)) {
-                        await fs.unlink(files.document.filepath);
-                        return responseReturn(res, 400, { error: 'Invalid file type. Only JPG, PNG, or PDF allowed' });
-                    }
-
-                    // File size validation
-                    const maxSize = 5 * 1024 * 1024; // 5MB
-                    if (files.document.size > maxSize) {
-                        await fs.unlink(files.document.filepath);
-                        return responseReturn(res, 400, { error: 'File exceeds size limit of 5MB' });
-                    }
-
-                    // Check upload limits
-                    if (seller.security.documentUploadCount >= 3) {
-                        const lastUpload = seller.security.lastDocumentUpload;
-                        const hoursSinceLast = lastUpload ?
-                            (new Date() - lastUpload) / (1000 * 60 * 60) : 0;
-
-                        if (hoursSinceLast < 24) {
-                            await fs.unlink(files.document.filepath);
-                            return responseReturn(res, 429, {
-                                error: 'Document upload limit exceeded. Try again tomorrow.'
-                            });
-                        } else {
-                            // Reset counter if last upload was more than 24 hours ago
-                            seller.security.documentUploadCount = 0;
-                            await seller.save();
-                        }
-                    }
-
-                    // Malware scan
-                    const scanResult = await this.scanForMalware(files.document.filepath);
-                    if (scanResult.status !== 'clean') {
-                        await fs.unlink(files.document.filepath);
-                        return responseReturn(res, 422, {
-                            error: scanResult.details || 'File security check failed'
-                        });
-                    }
-                }
-
-                // Create update object
+                // Create update object for shop info
                 const updateData = {
                     'shopInfo.shopName': fields.shopName || '',
                     'shopInfo.division': fields.division || '',
@@ -428,70 +462,77 @@ class authControllers {
                     'shopInfo.businessType': fields.businessType || 'small',
                     'shopInfo.cacNumber': fields.cacNumber || '',
                     'shopInfo.tin': fields.tin || '',
-                    'shopInfo.postalCode': fields.postalCode || '',
-                    'shopInfo.documentVerification.status': 'pending' // Set to pending
+                    'shopInfo.businessNumber': fields.businessNumber || '',
+                    'shopInfo.documentVerification.status': 'pending'
                 };
 
-                // Process document if uploaded
-                let documentUrl = '';
+                // Handle location data - UPDATED: Use proper GeoJSON format
+                if (fields.latitude && fields.longitude) {
+                    console.log('Saving coordinates to database:', {
+                        latitude: fields.latitude,
+                        longitude: fields.longitude,
+                        source: fields.geocodingSource
+                    });
+
+                    // Build complete location object for sellerModel with GeoJSON
+                    const locationData = {
+                        'location.address': fields.formattedAddress || fields.sub_district || '',
+                        'location.city': fields.district || '',
+                        'location.state': fields.division || '',
+                        'location.country': 'Nigeria',
+                        'location.businessNumber': fields.businessNumber || '',
+                        'location.coordinates': {
+                            type: "Point",
+                            coordinates: [
+                                parseFloat(fields.longitude), // Note: longitude first
+                                parseFloat(fields.latitude)   // Then latitude
+                            ]
+                        },
+                        'location.geocodingSource': fields.geocodingSource || 'manual'
+                    };
+
+                    // Merge location data with update data
+                    Object.assign(updateData, locationData);
+                }
+
+                // File validation and processing
                 if (files.document) {
+                    const allowedMimes = ['image/jpeg', 'image/png', 'application/pdf'];
+                    if (!allowedMimes.includes(files.document.mimetype)) {
+                        await fs.unlink(files.document.filepath);
+                        return responseReturn(res, 400, { error: 'Invalid file type. Only JPG, PNG, or PDF allowed' });
+                    }
+
+                    const maxSize = 5 * 1024 * 1024;
+                    if (files.document.size > maxSize) {
+                        await fs.unlink(files.document.filepath);
+                        return responseReturn(res, 400, { error: 'File exceeds size limit of 5MB' });
+                    }
+
                     try {
-                        // Configure upload options
                         const uploadOptions = {
                             folder: process.env.NODE_ENV === 'production' ?
                                 'prod_id_verification' : 'dev_id_verification',
-                            context: `id_type=${fields.documentType}|seller_id=${req.id}|verification=required`,
                             resource_type: 'auto',
                             quality_analysis: true
                         };
 
-                        // Upload to Cloudinary
                         const result = await cloudinary.uploader.upload(
                             files.document.filepath,
                             uploadOptions
                         );
 
-                        documentUrl = result.secure_url;
-                        updateData['shopInfo.document'] = documentUrl;
-
-                        // Process verification with Dojah
-                        // PLACEHOLDER - REPLACE WITH ACTUAL IMPLEMENTATION
-                        const verificationResults = {
+                        updateData['shopInfo.document'] = result.secure_url;
+                        updateData['shopInfo.documentVerification'] = {
                             status: 'pending',
                             checks: [],
-                            issues: ['Verification service not implemented']
-                        };
-                        // Actual implementation would look like:
-                        // const verificationResults = await this.verifyWithDojah(
-                        //   fields.documentType,
-                        //   fields.id_number,
-                        //   documentUrl
-                        // );
-
-                        // Update verification data
-                        updateData['shopInfo.documentVerification'] = verificationResults;
-
-                        // Set expiration date (default 1 year)
-                        const expiryDays = 365;
-                        updateData['shopInfo.documentExpiration'] = new Date(
-                            Date.now() + expiryDays * 24 * 60 * 60 * 1000
-                        );
-
-                        // Update verification history
-                        updateData.$push = {
-                            'security.verificationHistory': {
-                                timestamp: new Date(),
-                                status: verificationResults.status,
-                                service: 'dojah',
-                                verificationId: verificationResults.verificationId || null
-                            }
+                            issues: ['Verification pending']
                         };
 
                         // Track upload activity
-                        updateData.$inc = { 'security.documentUploadCount': 1 };
+                        updateData['security.documentUploadCount'] = (seller.security.documentUploadCount || 0) + 1;
                         updateData['security.lastDocumentUpload'] = new Date();
 
-                        // Delete temp file after upload
                         await fs.unlink(files.document.filepath);
                     } catch (uploadError) {
                         console.error('Document processing failed:', uploadError);
@@ -502,26 +543,24 @@ class authControllers {
                     }
                 }
 
-                // Prepare update command
-                const updateCommand = {
-                    $set: updateData
-                };
-
-                // Add operators if defined
-                if (updateData.$push) {
-                    updateCommand.$push = updateData.$push;
-                }
-                if (updateData.$inc) {
-                    updateCommand.$inc = updateData.$inc;
-                }
+                console.log('Final update data for sellerModel:', JSON.stringify(updateData, null, 2));
 
                 // Update seller in database
                 const updatedSeller = await sellerModel.findByIdAndUpdate(
                     req.id,
-                    updateCommand, // Use the combined update command
-                    { new: true, runValidators: true }
+                    { $set: updateData },
+                    {
+                        new: true,
+                        runValidators: true,
+                        upsert: false
+                    }
                 );
 
+                if (!updatedSeller) {
+                    return responseReturn(res, 500, { error: 'Failed to update seller' });
+                }
+
+                console.log('Seller updated successfully. Location data:', updatedSeller.location);
 
                 // Create sanitized user info for response
                 const userInfo = {
@@ -531,23 +570,33 @@ class authControllers {
                     role: updatedSeller.role,
                     status: updatedSeller.status,
                     image: updatedSeller.image || '',
+                    location: updatedSeller.location || {},
                     shopInfo: {
-                        shopName: updatedSeller.shopInfo.shopName || '',
-                        businessType: updatedSeller.shopInfo.businessType || '',
-                        document: updatedSeller.shopInfo.document || null,
-                        documentVerification: updatedSeller.shopInfo.documentVerification || {}
+                        shopName: updatedSeller.shopInfo?.shopName || '',
+                        businessType: updatedSeller.shopInfo?.businessType || '',
+                        division: updatedSeller.shopInfo?.division || '',
+                        district: updatedSeller.shopInfo?.district || '',
+                        sub_district: updatedSeller.shopInfo?.sub_district || '',
+                        cacNumber: updatedSeller.shopInfo?.cacNumber || '',
+                        tin: updatedSeller.shopInfo?.tin || '',
+                        businessNumber: updatedSeller.shopInfo?.businessNumber || '',
+                        document: updatedSeller.shopInfo?.document || null,
+                        documentVerification: updatedSeller.shopInfo?.documentVerification || {}
                     }
                 };
 
-                // Audit log - FIXED: Now using the added logAction method
+                // Audit log
                 await this.logAction(
                     req,
                     'PROFILE_UPDATE',
                     'seller',
                     req.id,
                     {
-                        documentType: fields.documentType,
-                        verificationStatus: updateData['shopInfo.documentVerification']?.status || 'none',
+                        shopName: fields.shopName,
+                        locationUpdated: !!(fields.latitude && fields.longitude),
+                        coordinates: fields.latitude && fields.longitude ?
+                            `Lat: ${fields.latitude}, Lng: ${fields.longitude}` : 'none',
+                        geocodingSource: fields.geocodingSource || 'none',
                         fileUploaded: !!files.document
                     }
                 );
@@ -559,11 +608,10 @@ class authControllers {
             });
         } catch (error) {
             console.error('Profile update error:', error);
-            responseReturn(res, 500, { error: 'Internal server error' });
+            responseReturn(res, 500, { error: 'Internal server error: ' + error.message });
         }
     };
 
-    // Virus scanning
     scanForMalware = async (filePath) => {
         if (process.env.NODE_ENV === 'production' && process.env.VIRUSTOTAL_API_KEY) {
             try {
@@ -589,14 +637,13 @@ class authControllers {
                 return { status: 'error', details: 'Scan failed' };
             }
         } else {
-            // Skip scanning in development
             return { status: 'clean' };
         }
     };
 
-    // authController.js
+
     create_inquiry = async (req, res) => {
-        const { id } = req; // seller id
+        const { id } = req;
 
         try {
             const seller = await sellerModel.findById(id);
@@ -604,17 +651,14 @@ class authControllers {
                 return responseReturn(res, 404, { error: 'Seller not found' });
             }
 
-            // Check if Persona environment variables are set
             if (!process.env.PERSONA_API_KEY || !process.env.PERSONA_TEMPLATE_ID) {
                 return responseReturn(res, 500, {
                     error: 'Persona configuration missing - check environment variables'
                 });
             }
 
-            // Create inquiry in Persona
             const response = await axios.post(
                 'https://api.sandbox.withpersona.com/v1/inquiries',
-                
                 {
                     data: {
                         type: 'inquiry',
@@ -633,9 +677,9 @@ class authControllers {
                         'Authorization': `Bearer ${process.env.PERSONA_API_KEY}`,
                         'Content-Type': 'application/json',
                         'Accept': 'application/json',
-                        'Persona-Version': '2023-01-05' // Add API version
+                        'Persona-Version': '2023-01-05'
                     },
-                    timeout: 10000 // 10-second timeout
+                    timeout: 10000
                 }
             );
 
@@ -661,14 +705,10 @@ class authControllers {
         }
     };
 
-
     persona_webhook = async (req, res) => {
         const event = req.body;
 
         try {
-            // Verify webhook signature here in production
-            // if (process.env.NODE_ENV === 'production') { ... }
-
             if (event.data.type === 'inquiry') {
                 const inquiry = event.data;
                 const referenceId = inquiry.attributes.reference_id;
