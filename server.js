@@ -35,7 +35,6 @@ app.use(cookieParser());
 app.use('/documents', express.static(path.join(__dirname, 'public/documents')));
 app.set('io', io);
 
-
 // Store active users
 let activeUsers = new Map();
 
@@ -174,7 +173,83 @@ io.on('connection', (socket) => {
   });
 });
 
-// Routes
+// ==================== HEALTH CHECK ENDPOINTS ====================
+
+// Simple health check
+app.get('/api/health-check', (req, res) => {
+  res.status(200).json({
+    status: 'success',
+    message: 'RidanExpress Server is running',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    environment: process.env.NODE_ENV || 'development'
+  });
+});
+
+// Detailed health check with database status
+app.get('/api/health-check/detailed', async (req, res) => {
+  try {
+    // Import mongoose to check database connection
+    const mongoose = require('mongoose');
+    const dbStatus = mongoose.connection.readyState;
+    
+    const statusMap = {
+      0: 'disconnected',
+      1: 'connected', 
+      2: 'connecting',
+      3: 'disconnecting'
+    };
+
+    // Get active socket connections
+    const activeConnections = {
+      total: activeUsers.size,
+      customers: getActiveUsersByRole('customer').length,
+      sellers: getActiveUsersByRole('seller').length
+    };
+
+    res.status(200).json({
+      status: 'success',
+      message: 'RidanExpress System Health Check',
+      timestamp: new Date().toISOString(),
+      server: {
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
+        nodeVersion: process.version,
+        environment: process.env.NODE_ENV || 'development',
+        platform: process.platform
+      },
+      database: {
+        status: statusMap[dbStatus] || 'unknown',
+        readyState: dbStatus,
+        connection: dbStatus === 1 ? 'healthy' : 'unhealthy'
+      },
+      websocket: {
+        activeConnections: activeConnections,
+        totalSockets: io.engine.clientsCount
+      },
+      services: {
+        api: 'operational',
+        database: dbStatus === 1 ? 'operational' : 'degraded',
+        websocket: 'operational'
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Health check failed',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Quick ping endpoint (lightweight)
+app.head('/api/health-check', (req, res) => {
+  res.status(200).end();
+});
+
+// ==================== ROUTES ====================
+
 app.use(bodyParser.json());
 app.use(cookieParser());
 
@@ -201,9 +276,31 @@ app.use('/api', require('./routes/dashboard/categoryRoutes'));
 app.use('/api', require('./routes/dashboard/productRoutes'));
 app.use('/api/admin', adminRoutes);
 
-app.get('/', (req, res) => res.send('I See you mother fucker '));
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({
+    message: 'RidanExpress E-commerce API',
+    version: '1.0.0',
+    timestamp: new Date().toISOString(),
+    healthCheck: `${req.protocol}://${req.get('host')}/api/health-check`
+  });
+});
+
+// 404 handler for API routes
+app.use('/api/*', (req, res) => {
+  res.status(404).json({
+    status: 'error',
+    message: 'API endpoint not found',
+    timestamp: new Date().toISOString(),
+    path: req.originalUrl
+  });
+});
 
 // Start server
 const port = process.env.PORT || 5000;
 dbConnect();
-server.listen(port, () => console.log(`Server is running on port ${port}!`));
+server.listen(port, () => {
+  console.log(`🚀 Server is running on port ${port}!`);
+  console.log(`📍 Health check: http://localhost:${port}/api/health-check`);
+  console.log(`📍 Detailed health: http://localhost:${port}/api/health-check/detailed`);
+});

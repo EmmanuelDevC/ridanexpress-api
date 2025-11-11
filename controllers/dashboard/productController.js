@@ -28,7 +28,7 @@ class productController {
             length = Array.isArray(length) ? length[0] : length;
             width = Array.isArray(width) ? width[0] : width;
             height = Array.isArray(height) ? height[0] : height;
-            
+
             const { images } = files;
             name = name.trim()
             name = name.replace(/[^a-zA-Z0-9\s-]/g, '')
@@ -67,9 +67,19 @@ class productController {
                     width: width ? parseFloat(width) : 0,
                     height: height ? parseFloat(height) : 0
                 })
-                responseReturn(res, 201, { message: "Product submitted for Ridan approval" })
+                responseReturn(res, 201,
+                    {
+                        message:
+                            "Product submitted for Ridan approval"
+                    }
+                )
             } catch (error) {
-                responseReturn(res, 500, { error: error.message })
+                responseReturn(res, 500,
+                    {
+                         error: error.message
+
+                     }
+                )
             }
         })
     }
