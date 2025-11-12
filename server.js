@@ -7,6 +7,8 @@ const http = require('http');
 const bodyParser = require('body-parser');
 const cookieParser = require('cookie-parser');
 const adminRoutes = require('./routes/adminRoutes');
+const axios = require("axios");
+
 require('dotenv').config();
 
 const socket = require('socket.io');
@@ -192,10 +194,10 @@ app.get('/api/health-check/detailed', async (req, res) => {
     // Import mongoose to check database connection
     const mongoose = require('mongoose');
     const dbStatus = mongoose.connection.readyState;
-    
+
     const statusMap = {
       0: 'disconnected',
-      1: 'connected', 
+      1: 'connected',
       2: 'connecting',
       3: 'disconnecting'
     };
@@ -302,5 +304,13 @@ dbConnect();
 server.listen(port, () => {
   console.log(`🚀 Server is running on port ${port}!`);
   console.log(`📍 Health check: http://localhost:${port}/api/health-check`);
+  (async () => {
+    try {
+      const res = await axios.get("https://api.ipify.org?format=json");
+      console.log("🌐 Render server public IP:", res.data.ip);
+    } catch (err) {
+      console.error("❌ Could not fetch server IP:", err.message);
+    }
+  })();
   console.log(`📍 Detailed health: http://localhost:${port}/api/health-check/detailed`);
 });
